@@ -63,6 +63,7 @@ If `obsidian help` prints `Command line interface is not enabled`, use local fil
 - macOS/Windows desktop with Obsidian app running: use local Obsidian CLI mode.
 - Linux desktop with Obsidian GUI available: CLI may work, use same checks above.
 - Headless Linux/container/sandbox (no GUI app session): assume Obsidian CLI is unavailable and skip directly to local filesystem or GitHub mode.
+- In many sandboxes, `~/.config/obsidian-gh-knowledge/config.json` and `~/Documents/obsidian_vault` do not exist by default. Expect explicit `--repo` usage.
 
 Do not block execution waiting for CLI in headless environments.
 
@@ -167,11 +168,26 @@ Never guess repo names.
 
 - GitHub CLI installed: `gh`
 - Authenticated: `gh auth status`
+- Repo access check before reads/writes:
+  - `gh repo view <owner/repo> >/dev/null`
+  - If this fails, stop and request a repo the current account/team can access.
 
 ### Commands
 
+Resolve script path in this order (sandbox-safe):
+
 ```bash
-python3 ~/.agents/skills/obsidian-gh-knowledge/scripts/github_knowledge_skill.py \
+if [ -f "agent-skills/skills/obsidian-gh-knowledge/scripts/github_knowledge_skill.py" ]; then
+  SCRIPT_PATH="agent-skills/skills/obsidian-gh-knowledge/scripts/github_knowledge_skill.py"
+elif [ -f "scripts/github_knowledge_skill.py" ]; then
+  SCRIPT_PATH="scripts/github_knowledge_skill.py"
+else
+  SCRIPT_PATH="$HOME/.agents/skills/obsidian-gh-knowledge/scripts/github_knowledge_skill.py"
+fi
+```
+
+```bash
+python3 "$SCRIPT_PATH" \
   --repo <owner/repo> <command> [args]
 ```
 
@@ -183,6 +199,25 @@ Available commands:
 - `move <src> <dest> --branch <branch_name> --message <commit_msg>`
 - `copy <src> <dest> --branch <branch_name> --message <commit_msg>`
 - `write <file_path> --stdin|--from-file <path> --branch <branch_name> --message <commit_msg>`
+
+### Headless Linux smoke checks
+
+Run these before substantial work in sandboxes:
+
+```bash
+command -v obsidian || true
+gh auth status
+python3 "$SCRIPT_PATH" --repo <owner/repo> list --path ""
+python3 "$SCRIPT_PATH" --repo <owner/repo> read "README.md"
+python3 "$SCRIPT_PATH" --repo <owner/repo> search "filename:_Overview.md"
+```
+
+Expected behavior from recent validation:
+
+- `obsidian` is often unavailable in headless Linux.
+- GitHub mode works when `--repo` is explicit and `gh` has access.
+- Emoji paths are supported when quoted:
+  - `python3 "$SCRIPT_PATH" --repo <owner/repo> list --path "0️⃣-Inbox"`
 
 ## Safety rules (critical)
 
@@ -198,6 +233,7 @@ Available commands:
 - Always quote paths (`"..."`), especially emoji folders.
 - Prefer copying exact paths from command output instead of retyping.
 - For 404/path errors in GitHub mode, verify with `list` first.
+- If `list` on repo root also fails, treat it as repo permission or wrong account/team context, not just path typo.
 
 ## Obsidian note authoring rules
 
