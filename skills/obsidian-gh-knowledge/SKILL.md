@@ -45,6 +45,7 @@ This ordering is for compatibility across desktop, server, and sandbox environme
 - This vault uses names like `5️⃣-Projects` (no space). `5️⃣ -Projects` will break local `ls` and GitHub reads.
 - If a `read` fails with "File not found", immediately `list` the parent folder or `search` for the filename instead of guessing.
 - If you need the emoji folder name programmatically: `ls -1 "$VAULT_DIR" | rg -m1 "Projects$"` (returns `5️⃣-Projects` in this vault).
+- If the user names a project (e.g. `cmux` vs `trends`), **scope writes to that project folder** under `5️⃣-Projects/GitHub/<project>/` and read `<project>/_Overview.md` first to confirm you’re in the right place.
 
 Quick checks:
 
