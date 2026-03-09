@@ -1,47 +1,53 @@
 ---
 name: obsidian-gh-knowledge
-description: Operate an Obsidian vault with official Obsidian CLI first (local), with local filesystem/git fallback, and GitHub API fallback when local access is unavailable. Use for listing, reading, searching, creating/updating, and moving notes in Obsidian vaults.
+description: Bootstrap and operate an Obsidian vault with official Obsidian CLI first (local), with local filesystem/git fallback, and GitHub API fallback when local access is unavailable. Use for first-run workspace init from a confirmed vault repo URL, wiring `~/.config/obsidian-gh-knowledge/config.json`, and for listing, reading, searching, creating/updating, and moving notes in Obsidian vaults.
 ---
 
 # Obsidian GH Knowledge (CLI-first)
 
 ## TL;DR
-- **Goal:** Operate the Obsidian vault using the safest and most optimal method depending on the environment context.
-- **Execution Order:** 1. Local Obsidian CLI -> 2. Local fallback -> 3. GitHub API fallback.
+- **Goal:** Bootstrap and operate the Obsidian vault using the safest and most optimal method depending on the environment context.
+- **Execution Order:** 0. Bootstrap a local clone after repo confirmation -> 1. Local Obsidian CLI -> 2. Local fallback -> 3. GitHub API fallback.
 - **Agent Rules:** Agents **must** read before write, include a `## TL;DR`, and **must** use Mermaid diagrams for visual explanations.
 
 ## Execution Mode Flowchart
 
 ```mermaid
 graph TB
-    A[Start Vault Operation] --> B{Check VAULT_DIR<br/>& prefer_local}
-    B -- Local enabled --> C{Is 'obsidian' CLI<br/>available?}
-    C -- Yes --> D["Use Local Obsidian CLI mode"]
-    C -- No --> E["Use Local filesystem/git fallback"]
-    B -- Remote/Headless --> F["Use GitHub API fallback<br/>(github_knowledge_skill.py)"]
-    
-    D --> G[Execute Read/Write]
-    E --> G
-    F --> G
+    A[Start Vault Operation] --> B{Local vault exists}
+    B -- Yes --> C{Obsidian CLI ready}
+    B -- No --> D{Confirmed vault repo URL}
+    D -- Yes --> E[Clone vault into Documents]
+    D -- No --> F[Use GitHub mode]
+    E --> C
+    C -- Yes --> G[Use local CLI mode]
+    C -- No --> H[Use local git fallback]
+    G --> I[Run operation]
+    H --> I
+    F --> I
 ```
 
-Use this skill to manage an Obsidian vault safely and consistently.
+Use this skill to bootstrap and manage an Obsidian vault safely and consistently.
 
 ## Source of truth
 
-- Official CLI docs: `https://help.obsidian.md/cli`
+- Primary live docs: Context7 Obsidian CLI index (`/websites/help_obsidian_md_cli`)
+- Official CLI docs: `https://help.obsidian.md/cli/index`
 - Public release note introducing CLI: `https://obsidian.md/changelog/2026-02-27-desktop-v1.12.4/`
 
 Note: CLI docs may still show early-access wording in some sections. Treat the public changelog (February 27, 2026) as the release marker.
 
 ## Execution modes (strict order)
 
-1. **Local Obsidian CLI mode (preferred)**
+0. **Bootstrap local vault**
+   - Use when local vault is missing and the user confirms the vault repo URL.
+   - Prefer cloning into `~/Documents/<repo-name>` for the current user, then write `local_vault_path` to config.
+1. **Local Obsidian CLI mode (preferred after bootstrap)**
    - Use when local vault exists and `obsidian` CLI is available and enabled.
 2. **Local filesystem/git fallback**
    - Use when local vault exists but CLI is not enabled.
 3. **GitHub mode fallback**
-   - Use when local vault is unavailable or explicitly disabled.
+   - Use when local vault is unavailable, bootstrap is not confirmed, or local access is explicitly disabled.
 
 This ordering is for compatibility across desktop, server, and sandbox environments.
 
@@ -50,22 +56,71 @@ This ordering is for compatibility across desktop, server, and sandbox environme
 1. Resolve `VAULT_DIR`:
    - If `~/.config/obsidian-gh-knowledge/config.json` has `local_vault_path`, use it.
    - Else use `~/Documents/obsidian_vault/`.
-2. If `VAULT_DIR` exists and `prefer_local` is not `false`, use local mode.
-3. In local mode, prefer official Obsidian CLI only if:
+2. If `VAULT_DIR` does not exist and the user has confirmed a vault repo URL, run the bootstrap script, then re-resolve `VAULT_DIR`.
+3. If `VAULT_DIR` exists and `prefer_local` is not `false`, use local mode.
+4. In local mode, prefer official Obsidian CLI only if:
    - `command -v obsidian` succeeds, and
    - `obsidian help` succeeds (CLI is enabled and app connection works).
-4. If CLI checks fail, fall back to local filesystem/git mode.
-5. If local mode is unavailable, use GitHub mode.
+5. If CLI checks fail, fall back to local filesystem/git mode.
+6. If local mode is unavailable, use GitHub mode.
+
+## First-time workspace bootstrap
+
+Use this workflow when a new workspace does not yet have the vault checked out locally.
+
+Rules:
+
+- Do **not** guess the vault repo. Ask the user to confirm the exact GitHub repo URL first.
+- After the user confirms a repo such as `https://github.com/karlorz/obsidian_vault`, prefer a local clone over GitHub-only mode.
+- Default destination is `~/Documents/<repo-name>`. For the example above, that becomes `~/Documents/obsidian_vault`.
+- `~` is user-specific. If the current user is `root`, the default destination becomes `/root/Documents/<repo-name>`.
+- Use `--vault-dir` only when the user explicitly wants a different destination.
+
+Resolve the bootstrap script path in this order:
+
+```bash
+if [ -f "skills/obsidian-gh-knowledge/scripts/init_local_vault.py" ]; then
+  INIT_SCRIPT_PATH="skills/obsidian-gh-knowledge/scripts/init_local_vault.py"
+elif [ -f "agent-skills/skills/obsidian-gh-knowledge/scripts/init_local_vault.py" ]; then
+  INIT_SCRIPT_PATH="agent-skills/skills/obsidian-gh-knowledge/scripts/init_local_vault.py"
+elif [ -f "scripts/init_local_vault.py" ]; then
+  INIT_SCRIPT_PATH="scripts/init_local_vault.py"
+else
+  INIT_SCRIPT_PATH="$HOME/.agents/skills/obsidian-gh-knowledge/scripts/init_local_vault.py"
+fi
+```
+
+Run it after confirmation:
+
+```bash
+python3 "$INIT_SCRIPT_PATH" \
+  --repo-url "https://github.com/karlorz/obsidian_vault" \
+  --repo-key personal
+```
+
+What the bootstrap script does:
+
+- Clones the confirmed vault repo into `~/Documents/<repo-name>` unless the user provided `--vault-dir`.
+- Reuses the directory if it is already a clone of the same repo.
+- Updates `~/.config/obsidian-gh-knowledge/config.json`:
+  - Sets `local_vault_path`
+  - Sets `prefer_local` to `true`
+  - Sets `default_repo` if it is currently missing
+  - Adds `repos.<key>` if `--repo-key` is provided
+  - Sets `vault_name` if it is currently missing
+
+After bootstrap, re-run mode selection and prefer local CLI or local git fallback from the new `local_vault_path`.
 
 ## Guardrails (avoid wrong paths)
 
 - Do **not** suppress errors when checking paths (avoid `2>/dev/null`); missing paths should be obvious.
-- If local vault is "missing", print diagnostics: `pwd`, `echo "$HOME"`, and `ls -la "$(dirname "$VAULT_DIR")"` before falling back.
+- If local vault is "missing", print diagnostics: `pwd`, `echo "$HOME"`, and `ls -la "$(dirname "$VAULT_DIR")"` before deciding between bootstrap and GitHub fallback.
 - Do **not** hand-type emoji folder names. Always `ls`/`list` and copy the exact path.
 - This vault uses names like `5️⃣-Projects` (no space). `5️⃣ -Projects` will break local `ls` and GitHub reads.
 - If a `read` fails with "File not found", immediately `list` the parent folder or `search` for the filename instead of guessing.
 - If you need the emoji folder name programmatically: `ls -1 "$VAULT_DIR" | rg -m1 "Projects$"` (returns `5️⃣-Projects` in this vault).
 - If the user names a project (e.g. `cmux` vs `trends`), **scope writes to that project folder** under `5️⃣-Projects/GitHub/<project>/` and read `<project>/_Overview.md` first to confirm you’re in the right place.
+- Do **not** clone a repo or overwrite `local_vault_path` until the user has confirmed the vault repo URL.
 
 Quick checks:
 
@@ -93,7 +148,7 @@ If `obsidian help` prints `Command line interface is not enabled`, use local fil
 - macOS/Windows desktop with Obsidian app running: use local Obsidian CLI mode.
 - Linux desktop with Obsidian GUI available: CLI may work, use same checks above.
 - Headless Linux/container/sandbox (no GUI app session): assume Obsidian CLI is unavailable and skip directly to local filesystem or GitHub mode.
-- In many sandboxes, `~/.config/obsidian-gh-knowledge/config.json` and `~/Documents/obsidian_vault` do not exist by default. Expect explicit `--repo` usage.
+- In many sandboxes, `~/.config/obsidian-gh-knowledge/config.json` and `~/Documents/obsidian_vault` do not exist by default. Expect either bootstrap with a confirmed repo URL or explicit `--repo` usage.
 
 Do not block execution waiting for CLI in headless environments.
 
@@ -101,7 +156,7 @@ Do not block execution waiting for CLI in headless environments.
 
 ### Requirements
 
-- Obsidian desktop `1.12.4+`.
+- Obsidian desktop `1.12+`.
 - CLI enabled in app settings: `Settings -> General -> Advanced -> Command line interface`.
 - On macOS, ensure PATH contains `/Applications/Obsidian.app/Contents/MacOS`.
 - If CLI errors show `Unable to find helper app` or `Command line interface is not enabled`, re-enable the CLI toggle in settings and restart the terminal.
@@ -325,7 +380,9 @@ python3 ~/.agents/skills/obsidian-gh-knowledge/scripts/github_knowledge_skill.py
 
 ## Config file
 
-Create `~/.config/obsidian-gh-knowledge/config.json`:
+Prefer creating `~/.config/obsidian-gh-knowledge/config.json` via `scripts/init_local_vault.py` on first-run. Hand-edit the file only when you need to adjust repos or vault naming.
+
+Config shape:
 
 ```json
 {

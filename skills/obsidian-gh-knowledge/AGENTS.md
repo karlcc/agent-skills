@@ -5,7 +5,9 @@ This folder is the source for the `obsidian-gh-knowledge` skill.
 ## Operating Rules
 
 - Prefer local vault operations when a local vault exists (path from `~/.config/obsidian-gh-knowledge/config.json` `local_vault_path`, else `~/Documents/obsidian_vault/`), unless config `prefer_local` is `false`.
+- If no local vault exists yet and the user confirms a vault repo URL, bootstrap local mode first with `scripts/init_local_vault.py`; prefer cloning into `~/Documents/<repo-name>` for the current user and update `~/.config/obsidian-gh-knowledge/config.json` `local_vault_path` before using GitHub-only mode.
 - Do not guess the user's vault repo.
+- Ask for explicit confirmation before cloning a vault repo or repointing `local_vault_path`.
 - Resolve the target repo in this order:
   1. `--repo <owner/repo>` if provided
   2. `--repo <key>` resolved from `~/.config/obsidian-gh-knowledge/config.json` (`repos.<key>`)
@@ -15,10 +17,12 @@ This folder is the source for the `obsidian-gh-knowledge` skill.
 
 ## Entrypoint
 
+- Bootstrap script: `scripts/init_local_vault.py`
 - GitHub mode script: `scripts/github_knowledge_skill.py`
 - Commands: `list`, `read`, `search`, `move`, `copy`, `write`
 
 ## Files
 
+- `scripts/init_local_vault.py`: Clone a confirmed vault repo into `~/Documents/<repo-name>` and wire local config for first-run setup.
 - `scripts/github_knowledge_skill.py`: GitHub-backed single-file operations.
 - `references/obsidian-organizer.md`: Organizing workflow reference.
