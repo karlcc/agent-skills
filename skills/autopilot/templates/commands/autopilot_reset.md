@@ -78,6 +78,7 @@ if [ -z "$SID" ]; then
   exit 1
 fi
 rm -f "/tmp/claude-autopilot-turns-${SID}" "/tmp/claude-autopilot-stop-${SID}" "/tmp/claude-autopilot-blocked-${SID}"
+rm -f "/tmp/claude-autopilot-completed-${SID}" "/tmp/claude-autopilot-state-${SID}" "/tmp/claude-autopilot-idle-${SID}"
 echo "Reset current session: ${SID:0:20}..."
 echo "Next cycle will start from turn 1/$MAX_TURNS"
 ```
@@ -91,6 +92,7 @@ for f in /tmp/claude-autopilot-turns-*; do
   [ -f "$f" ] || continue
   SID="${f#/tmp/claude-autopilot-turns-}"
   rm -f "/tmp/claude-autopilot-turns-${SID}" "/tmp/claude-autopilot-stop-${SID}" "/tmp/claude-autopilot-blocked-${SID}"
+  rm -f "/tmp/claude-autopilot-completed-${SID}" "/tmp/claude-autopilot-state-${SID}" "/tmp/claude-autopilot-idle-${SID}"
   echo "Reset: ${SID:0:20}..."
   COUNT=$((COUNT + 1))
 done

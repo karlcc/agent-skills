@@ -28,6 +28,24 @@ SESSION_ID="${SESSION_ID:-default}"
 # Helper: clean up the blocked flag so downstream hooks know autopilot is done
 cleanup_blocked_flag() {
   rm -f "/tmp/claude-autopilot-blocked-${SESSION_ID}"
+  rm -f "/tmp/claude-autopilot-state-${SESSION_ID}"
+  rm -f "/tmp/claude-autopilot-idle-${SESSION_ID}"
+}
+
+hash_git_state() {
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 | cut -c1-8
+    return 0
+  fi
+
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | cut -c1-8
+    return 0
+  fi
+
+  # Defensive fallback: keep dirty states unique enough to avoid false idle stops
+  # if the installer preflight was bypassed.
+  echo "missing-hash-tool-$(date +%s)"
 }
 
 # Clean up any stale completed marker from a previous cycle where codex-review
@@ -84,6 +102,44 @@ if [ -f "$TURN_FILE" ]; then
 fi
 TURN_COUNT=$((TURN_COUNT + 1))
 echo "$TURN_COUNT" > "$TURN_FILE"
+
+# Idle detection via git state fingerprinting
+IDLE_THRESHOLD="${CLAUDE_AUTOPILOT_IDLE_THRESHOLD:-3}"
+STATE_FILE="/tmp/claude-autopilot-state-${SESSION_ID}"
+IDLE_COUNT_FILE="/tmp/claude-autopilot-idle-${SESSION_ID}"
+
+# Compute current git state
+CURRENT_HEAD=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+HAS_UNCOMMITTED=$(git status --porcelain 2>/dev/null | grep -q . && echo "1" || echo "0")
+if [ "$HAS_UNCOMMITTED" = "1" ]; then
+  DIRTY_HASH=$({ git diff 2>/dev/null; git diff --cached 2>/dev/null; } | hash_git_state)
+else
+  DIRTY_HASH="clean"
+fi
+CURRENT_STATE="${CURRENT_HEAD}:${DIRTY_HASH}"
+
+# Compare with previous turn
+PREV_STATE=""
+[ -f "$STATE_FILE" ] && PREV_STATE=$(cat "$STATE_FILE" 2>/dev/null || echo "")
+echo "$CURRENT_STATE" > "$STATE_FILE"
+
+# Track consecutive idle turns
+IDLE_COUNT=0
+[ -f "$IDLE_COUNT_FILE" ] && IDLE_COUNT=$(cat "$IDLE_COUNT_FILE" 2>/dev/null || echo "0")
+
+if [ "$CURRENT_STATE" = "$PREV_STATE" ] && [ -n "$PREV_STATE" ]; then
+  IDLE_COUNT=$((IDLE_COUNT + 1))
+  echo "$IDLE_COUNT" > "$IDLE_COUNT_FILE"
+
+  if [ "$IDLE_COUNT" -ge "$IDLE_THRESHOLD" ]; then
+    echo "[Autopilot] No activity for $IDLE_COUNT turns, allowing stop" >&2
+    cleanup_blocked_flag
+    rm -f "$TURN_FILE"
+    exit 0
+  fi
+else
+  rm -f "$IDLE_COUNT_FILE"
+fi
 
 # Check turn limit
 if ! is_infinite_mode && [ "$TURN_COUNT" -ge "$MAX_TURNS" ]; then

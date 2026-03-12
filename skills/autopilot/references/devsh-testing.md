@@ -58,9 +58,13 @@ Confirm the remote repo contains:
 
 Then verify:
 
+- the copied skill bundle can run its installer directly from that copied path
 - `session-start.sh` writes `/tmp/claude-current-session-id`
 - `autopilot-keep-running.sh` creates or updates `/tmp/claude-autopilot-turns-<session-id>`
+- `autopilot-keep-running.sh` also manages `/tmp/claude-autopilot-state-<session-id>` and `/tmp/claude-autopilot-idle-<session-id>` while idle detection is active
 - `/autopilot_reset stop` semantics create `/tmp/claude-autopilot-stop-<session-id>`
+- `/autopilot_reset` clears turn, stop, blocked, completed, state, and idle files for the target session
+- the installer reports a clear dependency error if `jq` or both hash commands are unavailable
 - the install works without relying on `~/.claude`
 
 ## 6. Clean up

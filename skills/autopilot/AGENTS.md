@@ -6,12 +6,15 @@ This folder is the source for the `autopilot` skill.
 
 - The source-of-truth files for repo-local installs live inside this bundle under `templates/`.
 - The installer entrypoint is `scripts/install_repo_local_autopilot.py`.
+- Keep the bundle self-contained so a fresh workspace clone can install it without any external checkout.
 - Install into a target repository's local `.claude/` directory only. Do not install into `~/.claude/`.
 - The installed hook commands must use repo-local paths: `"$CLAUDE_PROJECT_DIR"/.claude/...`.
 - The installer must be idempotent: re-running it must not duplicate hook entries or re-add duplicate files.
+- The installer should fail clearly if required runtime commands are unavailable: `jq` plus either `shasum` or `sha256sum`.
 - Preserve unrelated entries in the target repo's `.claude/settings.json`, including other hook commands and non-hook settings.
 - Keep the autopilot Stop hook first in the Stop hook chain so downstream hooks can observe the blocked flag correctly.
 - If the target settings file already defines `AUTOPILOT_KEEP_RUNNING_DISABLED` or `CLAUDE_AUTOPILOT_MAX_TURNS`, preserve the user's existing values.
+- Keep reset behavior aligned with hook state. A full reset should clear turn, stop, blocked, completed, idle, and state files for the session.
 
 ## Installed Files
 
@@ -38,3 +41,5 @@ The installed hooks and reset command rely on these session-scoped files under `
 - `/tmp/claude-autopilot-stop-<session-id>`
 - `/tmp/claude-autopilot-blocked-<session-id>`
 - `/tmp/claude-autopilot-completed-<session-id>`
+- `/tmp/claude-autopilot-state-<session-id>`
+- `/tmp/claude-autopilot-idle-<session-id>`

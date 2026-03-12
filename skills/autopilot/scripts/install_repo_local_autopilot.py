@@ -40,6 +40,22 @@ def skill_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def ensure_runtime_dependencies() -> None:
+    missing: list[str] = []
+    if shutil.which("jq") is None:
+        missing.append("jq")
+
+    if shutil.which("shasum") is None and shutil.which("sha256sum") is None:
+        missing.append("shasum or sha256sum")
+
+    if missing:
+        joined = ", ".join(missing)
+        raise ValueError(
+            "Missing required runtime command(s): "
+            f"{joined}. Install them before enabling the repo-local autopilot bundle."
+        )
+
+
 def read_json(path: Path) -> dict[str, object]:
     if not path.exists():
         return {}
@@ -165,6 +181,8 @@ def ensure_directories(repo: Path) -> tuple[Path, Path, Path]:
 def install(repo: Path) -> None:
     if not repo.exists() or not repo.is_dir():
         raise FileNotFoundError(f"Target repository does not exist: {repo}")
+
+    ensure_runtime_dependencies()
 
     root = skill_root()
     claude_dir, hooks_dir, commands_dir = ensure_directories(repo)
