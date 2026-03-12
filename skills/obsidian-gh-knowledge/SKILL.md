@@ -9,6 +9,7 @@ description: Bootstrap and operate an Obsidian vault with official Obsidian CLI 
 - **Goal:** Bootstrap and operate the Obsidian vault using the safest and most optimal method depending on the environment context.
 - **Execution Order:** 0. Bootstrap a local clone after repo confirmation -> 1. Local Obsidian CLI -> 2. Local fallback -> 3. GitHub API fallback.
 - **Agent Rules:** Agents **must** read before write, include a `## TL;DR`, and **must** use Mermaid diagrams for visual explanations.
+- **Project Scoping:** When working on a specific project (cmux, trends, etc.), **stay within that project's folder** under `5️⃣-Projects/GitHub/<project>/`. See "Project Scoping (CRITICAL)" section below.
 
 ## Execution Mode Flowchart
 
@@ -119,8 +120,54 @@ After bootstrap, re-run mode selection and prefer local CLI or local git fallbac
 - This vault uses names like `5️⃣-Projects` (no space). `5️⃣ -Projects` will break local `ls` and GitHub reads.
 - If a `read` fails with "File not found", immediately `list` the parent folder or `search` for the filename instead of guessing.
 - If you need the emoji folder name programmatically: `ls -1 "$VAULT_DIR" | rg -m1 "Projects$"` (returns `5️⃣-Projects` in this vault).
-- If the user names a project (e.g. `cmux` vs `trends`), **scope writes to that project folder** under `5️⃣-Projects/GitHub/<project>/` and read `<project>/_Overview.md` first to confirm you’re in the right place.
 - Do **not** clone a repo or overwrite `local_vault_path` until the user has confirmed the vault repo URL.
+
+### Project Scoping (CRITICAL)
+
+> [!warning] Common Mistake
+> Agents often navigate to the wrong project folder (e.g., going to `trends/` when working on `cmux`). This wastes context and confuses the user.
+
+**Rules for project-scoped operations:**
+
+1. **Determine current project context FIRST** before any vault operation:
+   - Check the current working directory (e.g., `/root/workspace` -> look for `CLAUDE.md` or `package.json` to identify project)
+   - Check conversation context for project mentions
+   - If ambiguous, **ask the user** which project they mean
+
+2. **Scope ALL operations** (reads AND writes) to the correct project folder:
+   - Project folders live under `5️⃣-Projects/GitHub/<project>/`
+   - Example: cmux project -> `5️⃣-Projects/GitHub/cmux/`
+   - Example: trends project -> `5️⃣-Projects/GitHub/trends/`
+
+3. **Always read `<project>/_Overview.md` first** to confirm you’re in the right place before any other reads or writes.
+
+4. **Never cross project boundaries** without explicit user request:
+   - If working on `cmux`, do not read/write to `trends/` folder
+   - If user asks for "roadmap" in cmux context, look in `cmux/cmux-agent-dev-roadmap.md`, NOT `trends/trends-dev-roadmap.md`
+
+5. **Project detection heuristic** (in order):
+   ```bash
+   # 1. Check if current workspace has project identifier
+   if [ -f "CLAUDE.md" ]; then
+     PROJECT=$(grep -m1 "project.*cmux\|project.*trends" CLAUDE.md | grep -oE "cmux|trends" | head -1)
+   fi
+
+   # 2. Check package.json name field
+   if [ -z "$PROJECT" ] && [ -f "package.json" ]; then
+     PROJECT=$(jq -r ‘.name // empty’ package.json 2>/dev/null | grep -oE "cmux|trends" | head -1)
+   fi
+
+   # 3. Check git remote
+   if [ -z "$PROJECT" ]; then
+     PROJECT=$(git remote get-url origin 2>/dev/null | grep -oE "cmux|trends" | head -1)
+   fi
+   ```
+
+6. **When listing project folders**, always show what’s available:
+   ```bash
+   ls "$VAULT_DIR/5️⃣-Projects/GitHub/"
+   # Output: cmux  data-labeling  openclaw  trends
+   ```
 
 Quick checks:
 
