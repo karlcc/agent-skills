@@ -10,6 +10,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+try:
+    import yaml
+except ModuleNotFoundError:
+    yaml = None
+
 
 CONFIG_PATH = Path("~/.config/obsidian-gh-knowledge/config.json").expanduser()
 DEFAULT_VAULT_DIR = Path("~/Documents/obsidian_vault").expanduser()
@@ -17,6 +22,44 @@ INBOX_DIR = "0️⃣-Inbox"
 DRAFTS_DIR = "2️⃣-Drafts"
 PROJECTS_ROOT = "5️⃣-Projects"
 HELPER_WARNING = "Unable to find helper app"
+REQUIRED_FOLDERS = (
+    INBOX_DIR,
+    "1️⃣-Index",
+    DRAFTS_DIR,
+    "3️⃣-Plugins",
+    "4️⃣-Attachments",
+    PROJECTS_ROOT,
+    "assets",
+    "100-Templates",
+)
+AUDIT_SKIP_DIRS = {
+    ".git",
+    ".obsidian",
+    ".sisyphus",
+    ".agent",
+    ".venv",
+    ".venv_xlsx",
+    "assets",
+    "4️⃣-Attachments",
+    "archive",
+    "_archive",
+    "node_modules",
+}
+TLDR_SKIP_TOP_LEVEL_DIRS = {
+    "agent-skills",
+    "help_obsidian_md",
+}
+TLDR_SKIP_FILE_NAMES = {
+    "README.md",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "_Overview.md",
+}
+PROJECT_DIR_SKIP_NAMES = {
+    "archive",
+    "_archive",
+}
+TLDR_PATTERN = re.compile(r"^\s*##\s+TL;DR\s*$", re.IGNORECASE)
 
 
 def _expand_path(path: str) -> str:
@@ -259,6 +302,92 @@ def _json_command(vault_dir: Path, *args: str, label: str) -> tuple[object, bool
     return data, helper_warning
 
 
+def _should_skip_audit_path(relative_path: Path) -> bool:
+    for part in relative_path.parts[:-1]:
+        if part.startswith(".") or part in AUDIT_SKIP_DIRS:
+            return True
+    return False
+
+
+def _should_check_tldr(relative_path: Path) -> bool:
+    if _should_skip_audit_path(relative_path):
+        return False
+    if relative_path.name in TLDR_SKIP_FILE_NAMES:
+        return False
+    if relative_path.parts and relative_path.parts[0] in TLDR_SKIP_TOP_LEVEL_DIRS:
+        return False
+    return True
+
+
+def _iter_audit_markdown_files(vault_dir: Path) -> list[Path]:
+    markdown_files: list[Path] = []
+    for path in vault_dir.rglob("*.md"):
+        if not path.is_file():
+            continue
+        relative_path = path.relative_to(vault_dir)
+        if _should_skip_audit_path(relative_path):
+            continue
+        markdown_files.append(relative_path)
+    return sorted(markdown_files)
+
+
+def _project_directories(vault_dir: Path) -> list[Path]:
+    projects_root = vault_dir / PROJECTS_ROOT
+    if not projects_root.is_dir():
+        return []
+
+    project_dirs: list[Path] = []
+    for category_dir in sorted(path for path in projects_root.iterdir() if path.is_dir()):
+        if any(path.is_file() and path.suffix == ".md" for path in category_dir.iterdir()):
+            project_dirs.append(category_dir.relative_to(vault_dir))
+        for project_dir in sorted(path for path in category_dir.iterdir() if path.is_dir()):
+            if project_dir.name.lower() in PROJECT_DIR_SKIP_NAMES or project_dir.name.startswith("."):
+                continue
+            project_dirs.append(project_dir.relative_to(vault_dir))
+    return project_dirs
+
+
+def _extract_frontmatter(lines: list[str]) -> tuple[str | None, int, str | None]:
+    if not lines or lines[0].strip() != "---":
+        return None, 0, None
+
+    for index in range(1, len(lines)):
+        if lines[index].strip() == "---":
+            return "\n".join(lines[1:index]), index + 1, None
+
+    return None, 0, "Unterminated frontmatter block"
+
+
+def _find_tldr_line(lines: list[str], *, start_index: int) -> int | None:
+    for index in range(start_index, len(lines)):
+        if TLDR_PATTERN.match(lines[index]):
+            return index + 1
+    return None
+
+
+def _render_sample(item: object) -> str:
+    if isinstance(item, str):
+        return item
+    if isinstance(item, dict):
+        if "path" in item and "error" in item:
+            return f"{item['path']}: {item['error']}"
+        if "path" in item and "line" in item:
+            return f"{item['path']}: line {item['line']}"
+    return str(item)
+
+
+def _print_samples(title: str, items: list[object], *, limit: int) -> None:
+    print(f"{title}: {len(items)}")
+    if not items:
+        print("  - none")
+        return
+    for item in items[:limit]:
+        print(f"  - {_render_sample(item)}")
+    remaining = len(items) - limit
+    if remaining > 0:
+        print(f"  - ... {remaining} more")
+
+
 def _doctor_data(vault_dir: Path) -> dict:
     config = _load_config()
     help_output, help_stderr, helper_warning = _obsidian_command(vault_dir, "help")
@@ -469,6 +598,180 @@ def _review(vault_dir: Path, *, json_output: bool, tags_limit: int, unresolved_l
         print("Warning: Obsidian printed macOS helper-app warnings, but review commands still completed successfully.")
 
 
+def _audit_data(vault_dir: Path, *, tldr_max_line: int) -> dict:
+    doctor = _doctor_data(vault_dir)
+    unresolved_links = _int_output(_obsidian_command(vault_dir, "unresolved", "total")[0], label="unresolved links")
+    orphans = _int_output(_obsidian_command(vault_dir, "orphans", "total")[0], label="orphans")
+    deadends = _int_output(_obsidian_command(vault_dir, "deadends", "total")[0], label="dead ends")
+    markdownlint_binary = shutil.which("markdownlint") or shutil.which("markdownlint-cli2")
+
+    missing_required_folders = [
+        folder
+        for folder in REQUIRED_FOLDERS
+        if not (vault_dir / folder).is_dir()
+    ]
+
+    project_dirs = _project_directories(vault_dir)
+    missing_project_overviews = [
+        project_dir.as_posix()
+        for project_dir in project_dirs
+        if not (vault_dir / project_dir / "_Overview.md").is_file()
+    ]
+
+    markdown_files = _iter_audit_markdown_files(vault_dir)
+    file_read_errors: list[dict[str, str]] = []
+    frontmatter_errors: list[dict[str, str]] = []
+    missing_tldr: list[str] = []
+    late_tldr: list[dict[str, int | str]] = []
+    frontmatter_files_checked = 0
+    tldr_files_checked = 0
+
+    for relative_path in markdown_files:
+        path = vault_dir / relative_path
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            file_read_errors.append({"path": relative_path.as_posix(), "error": str(exc)})
+            continue
+
+        lines = text.splitlines()
+        frontmatter_block, content_start_index, frontmatter_error = _extract_frontmatter(lines)
+        if frontmatter_error:
+            frontmatter_errors.append({"path": relative_path.as_posix(), "error": frontmatter_error})
+        elif frontmatter_block is not None:
+            frontmatter_files_checked += 1
+            if yaml is not None:
+                try:
+                    loaded = yaml.safe_load(frontmatter_block) if frontmatter_block.strip() else {}
+                except Exception as exc:  # pragma: no cover - depends on local parser errors
+                    frontmatter_errors.append(
+                        {
+                            "path": relative_path.as_posix(),
+                            "error": f"Invalid YAML frontmatter: {exc}",
+                        }
+                    )
+                else:
+                    if loaded is not None and not isinstance(loaded, dict):
+                        frontmatter_errors.append(
+                            {
+                                "path": relative_path.as_posix(),
+                                "error": "Frontmatter must be a YAML mapping.",
+                            }
+                        )
+
+        if _should_check_tldr(relative_path):
+            tldr_files_checked += 1
+            tldr_line = _find_tldr_line(lines, start_index=content_start_index)
+            if tldr_line is None:
+                missing_tldr.append(relative_path.as_posix())
+            elif tldr_line - content_start_index > tldr_max_line:
+                late_tldr.append({"path": relative_path.as_posix(), "line": tldr_line})
+
+    audit = {
+        "doctor": doctor,
+        "obsidian": {
+            "unresolved_links": unresolved_links,
+            "orphans": orphans,
+            "deadends": deadends,
+        },
+        "tooling": {
+            "yaml_available": yaml is not None,
+            "markdownlint_available": bool(markdownlint_binary),
+            "markdownlint_binary": markdownlint_binary,
+        },
+        "summary": {
+            "required_folders_checked": len(REQUIRED_FOLDERS),
+            "project_folders_checked": len(project_dirs),
+            "markdown_files_checked": len(markdown_files),
+            "tldr_files_checked": tldr_files_checked,
+            "frontmatter_files_checked": frontmatter_files_checked,
+            "tldr_max_line": tldr_max_line,
+        },
+        "issues": {
+            "missing_required_folders": missing_required_folders,
+            "missing_project_overviews": missing_project_overviews,
+            "file_read_errors": file_read_errors,
+            "frontmatter_errors": frontmatter_errors,
+            "missing_tldr": missing_tldr,
+            "late_tldr": late_tldr,
+        },
+    }
+
+    flags: list[str] = []
+    if missing_required_folders:
+        flags.append(
+            f"{len(missing_required_folders)} required {_pluralize(len(missing_required_folders), 'folder')} {_be_verb(len(missing_required_folders))} missing."
+        )
+    if missing_project_overviews:
+        flags.append(
+            f"{len(missing_project_overviews)} project {_pluralize(len(missing_project_overviews), 'folder')} {_be_verb(len(missing_project_overviews))} missing _Overview.md."
+        )
+    if frontmatter_errors:
+        flags.append(
+            f"{len(frontmatter_errors)} markdown {_pluralize(len(frontmatter_errors), 'file')} {_be_verb(len(frontmatter_errors))} failing frontmatter checks."
+        )
+    if file_read_errors:
+        flags.append(
+            f"{len(file_read_errors)} markdown {_pluralize(len(file_read_errors), 'file')} {_be_verb(len(file_read_errors))} unreadable as UTF-8 text."
+        )
+    if missing_tldr:
+        flags.append(
+            f"{len(missing_tldr)} {_pluralize(len(missing_tldr), 'note')} {_be_verb(len(missing_tldr))} missing a top-level TL;DR section."
+        )
+    if late_tldr:
+        flags.append(
+            f"{len(late_tldr)} {_pluralize(len(late_tldr), 'note')} {_be_verb(len(late_tldr))} placing TL;DR too far from the top."
+        )
+    if unresolved_links > 0:
+        flags.append(
+            f"{unresolved_links} unresolved {_pluralize(unresolved_links, 'link')} {_be_verb(unresolved_links)} still present."
+        )
+    audit["flags"] = flags
+    audit["ok"] = not flags
+    return audit
+
+
+def _audit(vault_dir: Path, *, json_output: bool, limit: int, tldr_max_line: int) -> None:
+    audit = _audit_data(vault_dir, tldr_max_line=tldr_max_line)
+    if json_output:
+        print(json.dumps(audit, indent=2))
+        return
+
+    doctor = audit["doctor"]
+    obsidian = audit["obsidian"]
+    summary = audit["summary"]
+    issues = audit["issues"]
+
+    print("Vault audit")
+    print(f"Vault: {doctor['vault_name']}")
+    print(f"Path: {doctor['vault_dir']}")
+    print(f"Version: {doctor['version']}")
+    print("CLI ready: yes")
+    print(f"Markdown files checked: {summary['markdown_files_checked']}")
+    print(f"Project folders checked: {summary['project_folders_checked']}")
+    print(f"TL;DR checks: {summary['tldr_files_checked']}")
+    print(f"Frontmatter checks: {summary['frontmatter_files_checked']}")
+    print(f"Unresolved links: {obsidian['unresolved_links']}")
+    print(f"Orphans: {obsidian['orphans']}")
+    print(f"Dead ends: {obsidian['deadends']}")
+    print(f"PyYAML available: {'yes' if audit['tooling']['yaml_available'] else 'no'}")
+    print(f"markdownlint available: {'yes' if audit['tooling']['markdownlint_available'] else 'no'}")
+    _print_samples("Missing required folders", issues["missing_required_folders"], limit=limit)
+    _print_samples("Missing project overviews", issues["missing_project_overviews"], limit=limit)
+    _print_samples("Unreadable markdown files", issues["file_read_errors"], limit=limit)
+    _print_samples("Frontmatter errors", issues["frontmatter_errors"], limit=limit)
+    _print_samples("Missing TL;DR", issues["missing_tldr"], limit=limit)
+    _print_samples("Late TL;DR", issues["late_tldr"], limit=limit)
+    print("Flags:")
+    if audit["flags"]:
+        for flag in audit["flags"]:
+            print(f"  - {flag}")
+    else:
+        print("  - No audit issues detected.")
+    if doctor["helper_warning_seen"]:
+        print("Warning: Obsidian printed macOS helper-app warnings, but audit commands still completed successfully.")
+
+
 def _capture_note(
     vault_dir: Path,
     *,
@@ -617,6 +920,24 @@ def _parse_args() -> argparse.Namespace:
         help="Number of recent files to include",
     )
 
+    audit_parser = subparsers.add_parser(
+        "audit",
+        help="Run policy checks for vault folders, project overviews, TL;DR sections, and frontmatter",
+    )
+    audit_parser.add_argument("--json", action="store_true", help="Output JSON")
+    audit_parser.add_argument(
+        "--limit",
+        type=int,
+        default=10,
+        help="Number of issue samples to print per section",
+    )
+    audit_parser.add_argument(
+        "--tldr-max-line",
+        type=int,
+        default=40,
+        help="Maximum number of lines after frontmatter for the TL;DR heading to count as near the top",
+    )
+
     capture_parser = subparsers.add_parser("capture", help="Create a new note in Inbox or another folder")
     capture_parser.add_argument("title", help="Human title for the note")
     capture_parser.add_argument("--folder", default=INBOX_DIR, help=f"Target folder. Default: {INBOX_DIR}")
@@ -684,6 +1005,15 @@ def main() -> None:
             tags_limit=args.tags_limit,
             unresolved_limit=args.unresolved_limit,
             recent_limit=args.recent_limit,
+        )
+        return
+
+    if args.command == "audit":
+        _audit(
+            vault_dir,
+            json_output=args.json,
+            limit=args.limit,
+            tldr_max_line=args.tldr_max_line,
         )
         return
 
