@@ -273,6 +273,7 @@ For common macOS workflows, prefer the repo-specific helper over hand-building c
 ```bash
 python3 agent-skills/skills/obsidian-gh-knowledge/scripts/local_obsidian_knowledge.py doctor
 python3 agent-skills/skills/obsidian-gh-knowledge/scripts/local_obsidian_knowledge.py dashboard
+python3 agent-skills/skills/obsidian-gh-knowledge/scripts/local_obsidian_knowledge.py review
 python3 agent-skills/skills/obsidian-gh-knowledge/scripts/local_obsidian_knowledge.py capture "Quick note"
 python3 agent-skills/skills/obsidian-gh-knowledge/scripts/local_obsidian_knowledge.py project-note cmux "Feature review"
 python3 agent-skills/skills/obsidian-gh-knowledge/scripts/local_obsidian_knowledge.py organize "0️⃣-Inbox/feature-review.md" cmux
@@ -283,6 +284,7 @@ Wrapper responsibilities:
 
 - Resolves the local vault path from config.
 - Verifies the official `obsidian` CLI is available.
+- Runs a one-click `review` summary with vault health metrics, task counts, recent files, and unresolved-link samples.
 - Reads `_Overview.md` before project-scoped note creation or organization.
 - Uses `obsidian move` so note moves happen inside Obsidian instead of raw shell renames.
 - Optionally finishes with `local_vault_git_sync.py`.

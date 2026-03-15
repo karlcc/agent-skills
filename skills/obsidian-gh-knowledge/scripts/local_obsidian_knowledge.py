@@ -73,9 +73,51 @@ def _normalize_note_name(name: str) -> str:
     if normalized.lower().endswith(".md"):
         normalized = normalized[:-3]
     normalized = normalized.strip()
+    if "/" in normalized or "\\" in normalized:
+        _die(f"Note name must not contain path separators: {name!r}")
+    if normalized in {".", ".."}:
+        _die(f"Note name must not be '.' or '..': {name!r}")
     if not normalized:
         _die(f"Cannot derive a valid note name from: {name!r}")
     return normalized
+
+
+def _normalize_relative_path(value: str, *, label: str) -> Path:
+    raw = value.strip().replace("\\", "/")
+    if not raw:
+        _die(f"{label} cannot be empty.")
+    candidate = Path(raw)
+    if candidate.is_absolute():
+        _die(f"{label} must be relative to the vault root: {value!r}")
+    if any(part in {"", ".", ".."} for part in candidate.parts):
+        _die(f"{label} must not contain '.' or '..': {value!r}")
+    return Path(*candidate.parts)
+
+
+def _resolve_vault_path(
+    vault_dir: Path,
+    value: str,
+    *,
+    label: str,
+    must_exist: bool = False,
+    expect_directory: bool | None = None,
+) -> tuple[Path, str]:
+    normalized = _normalize_relative_path(value, label=label)
+    resolved_vault = vault_dir.resolve()
+    resolved_path = (resolved_vault / normalized).resolve()
+    try:
+        resolved_path.relative_to(resolved_vault)
+    except ValueError:
+        _die(f"{label} escapes the vault root: {value!r}")
+
+    if must_exist and not resolved_path.exists():
+        _die(f"{label} does not exist: {resolved_path}")
+    if expect_directory is True and not resolved_path.is_dir():
+        _die(f"{label} is not a directory: {resolved_path}")
+    if expect_directory is False and not resolved_path.is_file():
+        _die(f"{label} is not a file: {resolved_path}")
+
+    return resolved_path, normalized.as_posix()
 
 
 def _encode_cli_text(value: str) -> str:
@@ -129,6 +171,16 @@ def _int_output(value: str, *, label: str) -> int:
         return int(value.strip())
     except ValueError as exc:
         _die(f"Expected integer output for {label}, got: {value!r}\n{exc}")
+
+
+def _pluralize(count: int, singular: str, plural: str | None = None) -> str:
+    if count == 1:
+        return singular
+    return plural or f"{singular}s"
+
+
+def _be_verb(count: int) -> str:
+    return "is" if count == 1 else "are"
 
 
 def _list_project_names(vault_dir: Path, category: str) -> list[str]:
@@ -198,14 +250,23 @@ def _run_sync(vault_dir: Path, *, message: str | None, dry_run: bool) -> None:
         print(output)
 
 
-def _doctor(vault_dir: Path, *, json_output: bool) -> None:
+def _json_command(vault_dir: Path, *args: str, label: str) -> tuple[object, bool]:
+    output, _, helper_warning = _obsidian_command(vault_dir, *args)
+    try:
+        data = json.loads(output or "[]")
+    except json.JSONDecodeError as exc:
+        _die(f"Failed to parse JSON output for {label}.\n{exc}\n{output}")
+    return data, helper_warning
+
+
+def _doctor_data(vault_dir: Path) -> dict:
     config = _load_config()
     help_output, help_stderr, helper_warning = _obsidian_command(vault_dir, "help")
     version_output, _, version_helper = _obsidian_command(vault_dir, "version")
     vault_name, _, name_helper = _obsidian_command(vault_dir, "vault", "info=name")
     vault_path, _, path_helper = _obsidian_command(vault_dir, "vault", "info=path")
     helper_warning = helper_warning or version_helper or name_helper or path_helper
-    data = {
+    return {
         "vault_dir": str(vault_dir),
         "vault_name": vault_name.strip() or config.get("vault_name") or vault_dir.name,
         "vault_path_reported_by_cli": vault_path.strip(),
@@ -218,10 +279,16 @@ def _doctor(vault_dir: Path, *, json_output: bool) -> None:
         "helper_warning_seen": helper_warning,
         "stderr": help_stderr,
     }
+
+
+def _doctor(vault_dir: Path, *, json_output: bool) -> None:
+    data = _doctor_data(vault_dir)
     if json_output:
         print(json.dumps(data, indent=2))
         return
 
+    helper_warning = bool(data["helper_warning_seen"])
+    help_stderr = data["stderr"]
     print(f"Vault: {data['vault_name']}")
     print(f"Path: {data['vault_dir']}")
     print(f"CLI path: {data['obsidian_binary']}")
@@ -238,7 +305,7 @@ def _doctor(vault_dir: Path, *, json_output: bool) -> None:
             print(f"  {line}")
 
 
-def _dashboard(vault_dir: Path, *, tags_limit: int, json_output: bool) -> None:
+def _dashboard_data(vault_dir: Path, *, tags_limit: int) -> dict:
     stats = {
         "vault": (vault_dir.name),
         "path": str(vault_dir),
@@ -258,11 +325,7 @@ def _dashboard(vault_dir: Path, *, tags_limit: int, json_output: bool) -> None:
             _obsidian_command(vault_dir, "unresolved", "total")[0], label="unresolved links"
         ),
     }
-    tags_output, _, helper_warning = _obsidian_command(vault_dir, "tags", "counts", "format=json")
-    try:
-        tags = json.loads(tags_output or "[]")
-    except json.JSONDecodeError as exc:
-        _die(f"Failed to parse `obsidian tags` JSON output.\n{exc}\n{tags_output}")
+    tags, helper_warning = _json_command(vault_dir, "tags", "counts", "format=json", label="obsidian tags")
     top_tags = sorted(
         [
             {"tag": item.get("tag"), "count": int(item.get("count", 0))}
@@ -273,11 +336,18 @@ def _dashboard(vault_dir: Path, *, tags_limit: int, json_output: bool) -> None:
     )[:tags_limit]
     stats["top_tags"] = top_tags
     stats["helper_warning_seen"] = helper_warning
+    return stats
+
+
+def _dashboard(vault_dir: Path, *, tags_limit: int, json_output: bool) -> None:
+    stats = _dashboard_data(vault_dir, tags_limit=tags_limit)
 
     if json_output:
         print(json.dumps(stats, indent=2))
         return
 
+    top_tags = stats["top_tags"]
+    helper_warning = bool(stats["helper_warning_seen"])
     print(f"Vault: {stats['vault']}")
     print(f"Path: {stats['path']}")
     print(f"Files: {stats['files']}")
@@ -297,6 +367,108 @@ def _dashboard(vault_dir: Path, *, tags_limit: int, json_output: bool) -> None:
         print("Warning: Obsidian printed macOS helper-app warnings during the dashboard run.")
 
 
+def _review(vault_dir: Path, *, json_output: bool, tags_limit: int, unresolved_limit: int, recent_limit: int) -> None:
+    doctor = _doctor_data(vault_dir)
+    dashboard = _dashboard_data(vault_dir, tags_limit=tags_limit)
+    todo_tasks = _int_output(_obsidian_command(vault_dir, "tasks", "todo", "total")[0], label="todo tasks")
+    done_tasks = _int_output(_obsidian_command(vault_dir, "tasks", "done", "total")[0], label="done tasks")
+    recent_output, _, recent_helper = _obsidian_command(vault_dir, "recents")
+    unresolved_data, unresolved_helper = _json_command(
+        vault_dir,
+        "unresolved",
+        "counts",
+        "format=json",
+        label="obsidian unresolved",
+    )
+
+    recent_files = [line.strip() for line in recent_output.splitlines() if line.strip()][:recent_limit]
+    top_unresolved = sorted(
+        [
+            {"link": item.get("link"), "count": int(item.get("count", 0))}
+            for item in unresolved_data
+            if isinstance(item, dict) and item.get("link")
+        ],
+        key=lambda item: (-item["count"], item["link"]),
+    )[:unresolved_limit]
+
+    review = {
+        "doctor": doctor,
+        "dashboard": dashboard,
+        "tasks": {
+            "todo": todo_tasks,
+            "done": done_tasks,
+        },
+        "recent_files": recent_files,
+        "top_unresolved_links": top_unresolved,
+        "helper_warning_seen": bool(
+            doctor["helper_warning_seen"] or dashboard["helper_warning_seen"] or recent_helper or unresolved_helper
+        ),
+    }
+    flags: list[str] = []
+    if dashboard["unresolved_links"] > 0:
+        flags.append(
+            f"{dashboard['unresolved_links']} unresolved {_pluralize(dashboard['unresolved_links'], 'link')} need cleanup."
+        )
+    if dashboard["inbox_notes"] > 0:
+        flags.append(
+            f"{dashboard['inbox_notes']} inbox {_pluralize(dashboard['inbox_notes'], 'note')} {_be_verb(dashboard['inbox_notes'])} waiting for triage."
+        )
+    if dashboard["draft_notes"] > 0:
+        flags.append(
+            f"{dashboard['draft_notes']} draft {_pluralize(dashboard['draft_notes'], 'note')} {_be_verb(dashboard['draft_notes'])} still unorganized."
+        )
+    if dashboard["orphans"] > 0:
+        flags.append(
+            f"{dashboard['orphans']} {_pluralize(dashboard['orphans'], 'note')} {_be_verb(dashboard['orphans'])} missing inbound links."
+        )
+    review["flags"] = flags
+
+    if json_output:
+        print(json.dumps(review, indent=2))
+        return
+
+    print("Vault review")
+    print(f"Vault: {doctor['vault_name']}")
+    print(f"Path: {doctor['vault_dir']}")
+    print(f"Version: {doctor['version']}")
+    print("CLI ready: yes")
+    print(f"Files: {dashboard['files']}")
+    print(f"Folders: {dashboard['folders']}")
+    print(f"Inbox notes: {dashboard['inbox_notes']}")
+    print(f"Draft notes: {dashboard['draft_notes']}")
+    print(f"Orphans: {dashboard['orphans']}")
+    print(f"Dead ends: {dashboard['deadends']}")
+    print(f"Unresolved links: {dashboard['unresolved_links']}")
+    print(f"Open tasks: {todo_tasks}")
+    print(f"Done tasks: {done_tasks}")
+    print("Top tags:")
+    if dashboard["top_tags"]:
+        for item in dashboard["top_tags"]:
+            print(f"  - {item['tag']} ({item['count']})")
+    else:
+        print("  - none")
+    print("Top unresolved links:")
+    if top_unresolved:
+        for item in top_unresolved:
+            print(f"  - {item['link']} ({item['count']})")
+    else:
+        print("  - none")
+    print("Recent files:")
+    if recent_files:
+        for path in recent_files:
+            print(f"  - {path}")
+    else:
+        print("  - none")
+    print("Flags:")
+    if flags:
+        for flag in flags:
+            print(f"  - {flag}")
+    else:
+        print("  - No obvious cleanup flags.")
+    if review["helper_warning_seen"]:
+        print("Warning: Obsidian printed macOS helper-app warnings, but review commands still completed successfully.")
+
+
 def _capture_note(
     vault_dir: Path,
     *,
@@ -308,15 +480,19 @@ def _capture_note(
     sync: bool,
     dry_run: bool,
 ) -> None:
-    target_folder = vault_dir / folder
-    if not target_folder.is_dir():
-        _die(f"Target folder does not exist: {target_folder}")
+    _, relative_folder = _resolve_vault_path(
+        vault_dir,
+        folder,
+        label="Target folder",
+        must_exist=True,
+        expect_directory=True,
+    )
     file_name = _normalize_note_name(name) if name else _slugify(title)
     content = _compose_note(title, intro=body)
-    cmd = ["create", f"name={file_name}", f"path={folder}", f"content={_encode_cli_text(content)}"]
+    cmd = ["create", f"name={file_name}", f"path={relative_folder}", f"content={_encode_cli_text(content)}"]
     if overwrite:
         cmd.append("overwrite")
-    relative_path = f"{folder}/{file_name}.md"
+    relative_path = f"{relative_folder}/{file_name}.md"
     if dry_run:
         print(f"Would create: {relative_path}")
         return
@@ -375,12 +551,14 @@ def _organize_note(
 ) -> None:
     project_dir = _ensure_project_scope(vault_dir, category, project)
     _read_overview(vault_dir, category, project)
-    source_path = Path(source)
-    source_abs = vault_dir / source_path
-    if not source_abs.exists():
-        _die(f"Source note does not exist: {source_abs}")
-    if not source_abs.is_file():
-        _die(f"Source path is not a file: {source_abs}")
+    source_abs, source_relative = _resolve_vault_path(
+        vault_dir,
+        source,
+        label="Source note",
+        must_exist=True,
+        expect_directory=False,
+    )
+    source_path = Path(source_relative)
     extension = source_path.suffix or ".md"
     if keep_name:
         base_name = _normalize_note_name(source_path.name)
@@ -390,13 +568,13 @@ def _organize_note(
         base_name = _slugify(source_path.stem)
     relative_folder = project_dir.relative_to(vault_dir)
     if subdir:
-        relative_folder = relative_folder / subdir
+        relative_folder = relative_folder / _normalize_relative_path(subdir, label="Subdirectory")
     destination = (relative_folder / f"{base_name}{extension}").as_posix()
     if dry_run:
-        print(f"Would move: {source} -> {destination}")
+        print(f"Would move: {source_relative} -> {destination}")
         return
-    _obsidian_command(vault_dir, "move", f"path={source}", f"to={destination}")
-    print(f"Moved: {source} -> {destination}")
+    _obsidian_command(vault_dir, "move", f"path={source_relative}", f"to={destination}")
+    print(f"Moved: {source_relative} -> {destination}")
     if sync:
         _run_sync(vault_dir, message=f"Organize note into {project}: {base_name}", dry_run=False)
 
@@ -422,6 +600,22 @@ def _parse_args() -> argparse.Namespace:
     dashboard_parser = subparsers.add_parser("dashboard", help="Show vault organization health")
     dashboard_parser.add_argument("--json", action="store_true", help="Output JSON")
     dashboard_parser.add_argument("--tags-limit", type=int, default=10, help="Number of top tags to show")
+
+    review_parser = subparsers.add_parser("review", help="Run a one-click vault review using Obsidian CLI data")
+    review_parser.add_argument("--json", action="store_true", help="Output JSON")
+    review_parser.add_argument("--tags-limit", type=int, default=10, help="Number of top tags to show")
+    review_parser.add_argument(
+        "--unresolved-limit",
+        type=int,
+        default=10,
+        help="Number of unresolved links to include",
+    )
+    review_parser.add_argument(
+        "--recent-limit",
+        type=int,
+        default=10,
+        help="Number of recent files to include",
+    )
 
     capture_parser = subparsers.add_parser("capture", help="Create a new note in Inbox or another folder")
     capture_parser.add_argument("title", help="Human title for the note")
@@ -481,6 +675,16 @@ def main() -> None:
 
     if args.command == "dashboard":
         _dashboard(vault_dir, tags_limit=args.tags_limit, json_output=args.json)
+        return
+
+    if args.command == "review":
+        _review(
+            vault_dir,
+            json_output=args.json,
+            tags_limit=args.tags_limit,
+            unresolved_limit=args.unresolved_limit,
+            recent_limit=args.recent_limit,
+        )
         return
 
     if args.command == "capture":
