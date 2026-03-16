@@ -278,6 +278,7 @@ python3 agent-skills/skills/obsidian-gh-knowledge/scripts/local_obsidian_knowled
 python3 agent-skills/skills/obsidian-gh-knowledge/scripts/local_obsidian_knowledge.py fix-tldr --dry-run
 python3 agent-skills/skills/obsidian-gh-knowledge/scripts/local_obsidian_knowledge.py structure-report --dry-run
 python3 agent-skills/skills/obsidian-gh-knowledge/scripts/local_obsidian_knowledge.py structure-fix --dry-run
+python3 agent-skills/skills/obsidian-gh-knowledge/scripts/local_obsidian_knowledge.py archive-fix --dry-run
 python3 agent-skills/skills/obsidian-gh-knowledge/scripts/local_obsidian_knowledge.py capture "Quick note"
 python3 agent-skills/skills/obsidian-gh-knowledge/scripts/local_obsidian_knowledge.py project-note cmux "Feature review"
 python3 agent-skills/skills/obsidian-gh-knowledge/scripts/local_obsidian_knowledge.py organize "0️⃣-Inbox/feature-review.md" cmux
@@ -293,6 +294,7 @@ Wrapper responsibilities:
 - Can bulk-insert placeholder `## TL;DR` sections into notes that are missing one.
 - Can generate a local graph-based structure cleanup report for active-scope orphan and dead-end notes without depending on flaky live CLI list output.
 - Can apply high-confidence structure fixes by linking dead-end notes to their nearest `_Overview.md` and adding orphan notes to auto-generated cleanup sections inside project MOCs.
+- Can create missing `_Archive-Index.md` notes and backlink archived notes so archive folders stay navigable without polluting active MOCs.
 - Reads `_Overview.md` before project-scoped note creation or organization.
 - Uses `obsidian move` so note moves happen inside Obsidian instead of raw shell renames.
 - Optionally finishes with `local_vault_git_sync.py`.
