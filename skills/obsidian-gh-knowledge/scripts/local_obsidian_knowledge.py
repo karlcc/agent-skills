@@ -58,6 +58,7 @@ TLDR_SKIP_FILE_NAMES = {
     "_Overview.md",
 }
 STRUCTURE_REPORT_DEFAULT = "1️⃣-Index/vault-structure-cleanup-report.md"
+SIMPLIFY_REVIEW_DEFAULT = "1️⃣-Index/vault-simplify-dedupe-review.md"
 STRUCTURE_ROOT_HUB = Path("1️⃣-Index/vault-operations-index.md")
 STRUCTURE_PROMPT_HUB = Path("1️⃣-Index/prompt-library.md")
 STRUCTURE_CMUX_HUB = Path("1️⃣-Index/cmux-local-workflows-index.md")
@@ -69,6 +70,13 @@ ARCHIVE_INDEX_NAME = "_Archive-Index.md"
 TLDR_PATTERN = re.compile(r"^\s*##\s+TL;DR\s*$", re.IGNORECASE)
 WIKILINK_PATTERN = re.compile(r"!?\[\[([^\]]+)\]\]")
 MARKDOWN_LINK_PATTERN = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
+INTENTIONAL_DUPLICATE_STEMS = {
+    "_overview",
+    "_archive-index",
+    "readme",
+    "agents",
+    "claude",
+}
 
 
 def _expand_path(path: str) -> str:
@@ -603,6 +611,120 @@ def _folder_counts(paths: list[Path]) -> list[dict[str, object]]:
     ]
 
 
+def _normalize_dedupe_key(value: str) -> str:
+    return re.sub(r"\s+", " ", value.strip()).lower()
+
+
+def _frontmatter_aliases(frontmatter: object) -> list[str]:
+    if not isinstance(frontmatter, dict):
+        return []
+
+    raw_aliases: list[str] = []
+    for key in ("aliases", "alias"):
+        value = frontmatter.get(key)
+        if isinstance(value, str):
+            raw_aliases.append(value)
+        elif isinstance(value, list):
+            raw_aliases.extend(item for item in value if isinstance(item, str))
+
+    aliases: list[str] = []
+    seen: set[str] = set()
+    for alias in raw_aliases:
+        normalized = re.sub(r"\s+", " ", alias.strip())
+        if not normalized:
+            continue
+        dedupe_key = normalized.lower()
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        aliases.append(normalized)
+    return aliases
+
+
+def _duplicate_basename_groups(note_paths_list: list[Path]) -> list[dict[str, object]]:
+    basename_groups: dict[str, list[Path]] = defaultdict(list)
+    basename_labels: dict[str, str] = {}
+
+    for path in note_paths_list:
+        dedupe_key = _normalize_dedupe_key(path.stem)
+        if dedupe_key in INTENTIONAL_DUPLICATE_STEMS:
+            continue
+        basename_groups[dedupe_key].append(path)
+        basename_labels.setdefault(dedupe_key, path.stem)
+
+    duplicate_groups: list[dict[str, object]] = []
+    for dedupe_key, paths in basename_groups.items():
+        unique_paths = sorted(
+            {path.as_posix(): path for path in paths}.values(),
+            key=lambda path: path.as_posix(),
+        )
+        if len(unique_paths) < 2:
+            continue
+        duplicate_groups.append(
+            {
+                "value": basename_labels[dedupe_key],
+                "count": len(unique_paths),
+                "paths": [path.as_posix() for path in unique_paths],
+                "links": [_structure_note_link(path) for path in unique_paths],
+                "folders": sorted({path.parent.as_posix() for path in unique_paths}),
+            }
+        )
+
+    return sorted(
+        duplicate_groups,
+        key=lambda item: (-item["count"], str(item["value"]).lower(), item["paths"][0]),
+    )
+
+
+def _duplicate_alias_groups(vault_dir: Path, note_paths_list: list[Path]) -> list[dict[str, object]]:
+    if yaml is None:
+        return []
+
+    alias_groups: dict[str, dict[str, Path]] = defaultdict(dict)
+    alias_labels: dict[str, str] = {}
+
+    for relative_path in note_paths_list:
+        path = vault_dir / relative_path
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+
+        frontmatter_block, _, frontmatter_error = _extract_frontmatter(text.splitlines())
+        if frontmatter_error or frontmatter_block is None:
+            continue
+
+        try:
+            loaded = yaml.safe_load(frontmatter_block) if frontmatter_block.strip() else {}
+        except Exception:
+            continue
+
+        for alias in _frontmatter_aliases(loaded):
+            dedupe_key = _normalize_dedupe_key(alias)
+            alias_labels.setdefault(dedupe_key, alias)
+            alias_groups[dedupe_key][relative_path.as_posix()] = relative_path
+
+    duplicate_groups: list[dict[str, object]] = []
+    for dedupe_key, paths_map in alias_groups.items():
+        unique_paths = sorted(paths_map.values(), key=lambda path: path.as_posix())
+        if len(unique_paths) < 2:
+            continue
+        duplicate_groups.append(
+            {
+                "value": alias_labels[dedupe_key],
+                "count": len(unique_paths),
+                "paths": [path.as_posix() for path in unique_paths],
+                "links": [_structure_note_link(path) for path in unique_paths],
+                "folders": sorted({path.parent.as_posix() for path in unique_paths}),
+            }
+        )
+
+    return sorted(
+        duplicate_groups,
+        key=lambda item: (-item["count"], str(item["value"]).lower(), item["paths"][0]),
+    )
+
+
 def _structure_analysis(vault_dir: Path, *, exclude_relative: Path | None = None) -> dict:
     note_paths_list = [
         relative_path
@@ -659,8 +781,15 @@ def _structure_analysis(vault_dir: Path, *, exclude_relative: Path | None = None
     }
 
 
-def _structure_report_data(vault_dir: Path, *, output_relative: Path, limit: int, hotspot_limit: int) -> dict:
-    analysis = _structure_analysis(vault_dir, exclude_relative=output_relative)
+def _structure_report_data(
+    vault_dir: Path,
+    *,
+    output_relative: Path,
+    limit: int,
+    hotspot_limit: int,
+    analysis: dict | None = None,
+) -> dict:
+    analysis = analysis or _structure_analysis(vault_dir, exclude_relative=output_relative)
     note_paths_list = analysis["note_paths_list"]
     note_paths = analysis["note_paths"]
     orphans = analysis["orphans"]
@@ -1186,7 +1315,7 @@ def _dashboard(vault_dir: Path, *, tags_limit: int, json_output: bool) -> None:
         print("Warning: Obsidian printed macOS helper-app warnings during the dashboard run.")
 
 
-def _review(vault_dir: Path, *, json_output: bool, tags_limit: int, unresolved_limit: int, recent_limit: int) -> None:
+def _review_data(vault_dir: Path, *, tags_limit: int, unresolved_limit: int, recent_limit: int) -> dict:
     doctor = _doctor_data(vault_dir)
     dashboard = _dashboard_data(vault_dir, tags_limit=tags_limit)
     todo_tasks = _int_output(_obsidian_command(vault_dir, "tasks", "todo", "total")[0], label="todo tasks")
@@ -1226,7 +1355,7 @@ def _review(vault_dir: Path, *, json_output: bool, tags_limit: int, unresolved_l
     flags: list[str] = []
     if dashboard["unresolved_links"] > 0:
         flags.append(
-            f"{dashboard['unresolved_links']} unresolved {_pluralize(dashboard['unresolved_links'], 'link')} need cleanup."
+            f"{dashboard['unresolved_links']} unresolved {_pluralize(dashboard['unresolved_links'], 'link')} {_be_verb(dashboard['unresolved_links'])} still present."
         )
     if dashboard["inbox_notes"] > 0:
         flags.append(
@@ -1238,13 +1367,28 @@ def _review(vault_dir: Path, *, json_output: bool, tags_limit: int, unresolved_l
         )
     if dashboard["orphans"] > 0:
         flags.append(
-            f"{dashboard['orphans']} {_pluralize(dashboard['orphans'], 'note')} {_be_verb(dashboard['orphans'])} missing inbound links."
+            f"{dashboard['orphans']} {_pluralize(dashboard['orphans'], 'note')} {_be_verb(dashboard['orphans'])} missing inbound links in the full-vault graph."
         )
     review["flags"] = flags
+    return review
+
+
+def _review(vault_dir: Path, *, json_output: bool, tags_limit: int, unresolved_limit: int, recent_limit: int) -> None:
+    review = _review_data(
+        vault_dir,
+        tags_limit=tags_limit,
+        unresolved_limit=unresolved_limit,
+        recent_limit=recent_limit,
+    )
 
     if json_output:
         print(json.dumps(review, indent=2))
         return
+
+    doctor = review["doctor"]
+    dashboard = review["dashboard"]
+    top_unresolved = review["top_unresolved_links"]
+    recent_files = review["recent_files"]
 
     print("Vault review")
     print(f"Vault: {doctor['vault_name']}")
@@ -1258,8 +1402,8 @@ def _review(vault_dir: Path, *, json_output: bool, tags_limit: int, unresolved_l
     print(f"Orphans: {dashboard['orphans']}")
     print(f"Dead ends: {dashboard['deadends']}")
     print(f"Unresolved links: {dashboard['unresolved_links']}")
-    print(f"Open tasks: {todo_tasks}")
-    print(f"Done tasks: {done_tasks}")
+    print(f"Open tasks: {review['tasks']['todo']}")
+    print(f"Done tasks: {review['tasks']['done']}")
     print("Top tags:")
     if dashboard["top_tags"]:
         for item in dashboard["top_tags"]:
@@ -1279,13 +1423,243 @@ def _review(vault_dir: Path, *, json_output: bool, tags_limit: int, unresolved_l
     else:
         print("  - none")
     print("Flags:")
-    if flags:
-        for flag in flags:
+    if review["flags"]:
+        for flag in review["flags"]:
             print(f"  - {flag}")
     else:
         print("  - No obvious cleanup flags.")
     if review["helper_warning_seen"]:
         print("Warning: Obsidian printed macOS helper-app warnings, but review commands still completed successfully.")
+
+
+def _simplify_review_data(
+    vault_dir: Path,
+    *,
+    output_relative: Path,
+    tags_limit: int,
+    unresolved_limit: int,
+    recent_limit: int,
+    dedupe_limit: int,
+    hotspot_limit: int,
+    tldr_max_line: int,
+) -> dict:
+    review = _review_data(
+        vault_dir,
+        tags_limit=tags_limit,
+        unresolved_limit=unresolved_limit,
+        recent_limit=recent_limit,
+    )
+    audit = _audit_data(vault_dir, tldr_max_line=tldr_max_line)
+    analysis = _structure_analysis(vault_dir, exclude_relative=output_relative)
+    structure = _structure_report_data(
+        vault_dir,
+        output_relative=output_relative,
+        limit=dedupe_limit,
+        hotspot_limit=hotspot_limit,
+        analysis=analysis,
+    )
+    basename_duplicates = _duplicate_basename_groups(analysis["note_paths_list"])
+    alias_duplicates = _duplicate_alias_groups(vault_dir, analysis["note_paths_list"])
+
+    flags = list(review["flags"])
+    for flag in audit["flags"]:
+        if "unresolved link" in flag.lower() and review["dashboard"]["unresolved_links"] > 0:
+            continue
+        flags.append(flag)
+    if structure["counts"]["orphans"] > 0:
+        flags.append(
+            f"{structure['counts']['orphans']} active-scope {_pluralize(structure['counts']['orphans'], 'note')} {_be_verb(structure['counts']['orphans'])} still orphaned."
+        )
+    if structure["counts"]["deadends"] > 0:
+        flags.append(
+            f"{structure['counts']['deadends']} active-scope {_pluralize(structure['counts']['deadends'], 'note')} {_be_verb(structure['counts']['deadends'])} still dead ends."
+        )
+    if basename_duplicates:
+        flags.append(
+            f"{len(basename_duplicates)} duplicate basename {_pluralize(len(basename_duplicates), 'group')} {_be_verb(len(basename_duplicates))} worth manual merge review."
+        )
+    if alias_duplicates:
+        flags.append(
+            f"{len(alias_duplicates)} duplicate alias {_pluralize(len(alias_duplicates), 'group')} {_be_verb(len(alias_duplicates))} could confuse search and wikilink resolution."
+        )
+    deduped_flags = list(dict.fromkeys(flags))
+
+    return {
+        "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "output_path": output_relative.as_posix(),
+        "review": review,
+        "audit": audit,
+        "structure": structure,
+        "dedupe": {
+            "scope_notes": len(analysis["note_paths_list"]),
+            "basename_duplicates": basename_duplicates,
+            "alias_duplicates": alias_duplicates,
+            "basename_groups": len(basename_duplicates),
+            "alias_groups": len(alias_duplicates),
+            "alias_scan_enabled": yaml is not None,
+        },
+        "flags": deduped_flags,
+        "ok": not deduped_flags,
+    }
+
+
+def _simplify_review_markdown(data: dict, *, dedupe_limit: int) -> str:
+    review = data["review"]
+    audit = data["audit"]
+    structure = data["structure"]
+    dedupe = data["dedupe"]
+    doctor = review["doctor"]
+    dashboard = review["dashboard"]
+
+    lines = [
+        "# Vault Simplify and Dedupe Review",
+        "",
+        "## TL;DR",
+        f"- Vault review generated on **{data['generated_at']}** for **{doctor['vault_name']}**.",
+        f"- Health snapshot: **{dashboard['unresolved_links']}** unresolved links, **{len(audit['issues']['missing_tldr'])}** notes missing `## TL;DR`, and **{structure['counts']['orphans']} / {structure['counts']['deadends']} / {structure['counts']['isolated']}** active-scope orphan/dead-end/isolated notes.",
+        f"- Dedupe snapshot: **{dedupe['basename_groups']}** duplicate basename groups and **{dedupe['alias_groups']}** duplicate alias groups across **{dedupe['scope_notes']}** active notes.",
+        "",
+        "## Health Snapshot",
+        "",
+        f"- Files: **{dashboard['files']}**",
+        f"- Folders: **{dashboard['folders']}**",
+        f"- Inbox notes: **{dashboard['inbox_notes']}**",
+        f"- Draft notes: **{dashboard['draft_notes']}**",
+        f"- Open tasks: **{review['tasks']['todo']}**",
+        f"- Done tasks: **{review['tasks']['done']}**",
+        "",
+        "## Active Flags",
+    ]
+    if data["flags"]:
+        lines.append("")
+        for flag in data["flags"]:
+            lines.append(f"- {flag}")
+    else:
+        lines.extend(["", "- No simplify or dedupe flags detected."])
+
+    lines.extend([
+        "",
+        "## Structure Hotspots",
+        "",
+        "### Orphan Hotspots",
+        "| Folder | Count |",
+        "| --- | ---: |",
+    ])
+    orphan_hotspots = structure["orphans"]["hotspots"]
+    if orphan_hotspots:
+        for item in orphan_hotspots:
+            lines.append(f"| `{item['folder']}` | {item['count']} |")
+    else:
+        lines.append("| none | 0 |")
+
+    lines.extend([
+        "",
+        "### Dead-End Hotspots",
+        "| Folder | Count |",
+        "| --- | ---: |",
+    ])
+    deadend_hotspots = structure["deadends"]["hotspots"]
+    if deadend_hotspots:
+        for item in deadend_hotspots:
+            lines.append(f"| `{item['folder']}` | {item['count']} |")
+    else:
+        lines.append("| none | 0 |")
+
+    def _append_duplicate_table(title: str, groups: list[dict[str, object]], *, label: str) -> None:
+        lines.extend([
+            "",
+            f"## {title}",
+            f"| {label} | Count | Notes |",
+            "| --- | ---: | --- |",
+        ])
+        if groups:
+            for group in groups[:dedupe_limit]:
+                links = "<br/>".join(str(link) for link in group["links"])
+                lines.append(f"| `{group['value']}` | {group['count']} | {links} |")
+        else:
+            lines.append("| none | 0 | — |")
+
+    _append_duplicate_table("Duplicate File Names", dedupe["basename_duplicates"], label="Basename")
+    if dedupe["alias_scan_enabled"]:
+        _append_duplicate_table("Duplicate Aliases", dedupe["alias_duplicates"], label="Alias")
+    else:
+        lines.extend([
+            "",
+            "## Duplicate Aliases",
+            "",
+            "- Alias scan skipped because `PyYAML` is not available locally.",
+        ])
+
+    lines.extend([
+        "",
+        "## Suggested Actions",
+        "- Use this report as the first pass. Resolve policy failures and unresolved links before merging or renaming note content.",
+        "- Review duplicate basename groups next. If two notes represent the same concept, choose one canonical location and convert the other into a redirect, merge, or archive candidate.",
+        "- Review duplicate aliases last. Keep a single canonical alias per concept so search and wikilinks stay predictable.",
+        "",
+        "## Related",
+        f"- {_structure_note_link(STRUCTURE_ROOT_HUB, display='Vault Operations Index')}",
+        f"- {_structure_note_link(Path(STRUCTURE_REPORT_DEFAULT), display='Vault Structure Cleanup Report')}",
+        "",
+    ])
+    return "\n".join(lines)
+
+
+def _simplify_review(
+    vault_dir: Path,
+    *,
+    json_output: bool,
+    dry_run: bool,
+    tags_limit: int,
+    unresolved_limit: int,
+    recent_limit: int,
+    dedupe_limit: int,
+    hotspot_limit: int,
+    tldr_max_line: int,
+    output_path: str,
+) -> None:
+    output_relative = _normalize_relative_path(output_path, label="Output path")
+    data = _simplify_review_data(
+        vault_dir,
+        output_relative=output_relative,
+        tags_limit=tags_limit,
+        unresolved_limit=unresolved_limit,
+        recent_limit=recent_limit,
+        dedupe_limit=dedupe_limit,
+        hotspot_limit=hotspot_limit,
+        tldr_max_line=tldr_max_line,
+    )
+    if json_output:
+        print(json.dumps(data, indent=2))
+        return
+
+    report_text = _simplify_review_markdown(data, dedupe_limit=dedupe_limit)
+    output_abs = vault_dir / output_relative
+    if not dry_run:
+        output_abs.parent.mkdir(parents=True, exist_ok=True)
+        output_abs.write_text(report_text, encoding="utf-8")
+
+    print("Vault simplify review")
+    print(f"Vault: {data['review']['doctor']['vault_name']}")
+    print(f"Path: {data['review']['doctor']['vault_dir']}")
+    print(f"Files: {data['review']['dashboard']['files']}")
+    print(f"Folders: {data['review']['dashboard']['folders']}")
+    print(f"Unresolved links: {data['review']['dashboard']['unresolved_links']}")
+    print(f"Missing TL;DR: {len(data['audit']['issues']['missing_tldr'])}")
+    print(f"Active-scope orphans: {data['structure']['counts']['orphans']}")
+    print(f"Active-scope dead ends: {data['structure']['counts']['deadends']}")
+    print(f"Duplicate basename groups: {data['dedupe']['basename_groups']}")
+    print(f"Duplicate alias groups: {data['dedupe']['alias_groups']}")
+    print("Flags:")
+    if data["flags"]:
+        for flag in data["flags"]:
+            print(f"  - {flag}")
+    else:
+        print("  - No simplify or dedupe issues detected.")
+    if dry_run:
+        print(f"Would write report: {output_relative.as_posix()}")
+    else:
+        print(f"Wrote report: {output_relative.as_posix()}")
 
 
 def _audit_data(vault_dir: Path, *, tldr_max_line: int) -> dict:
@@ -1832,6 +2206,49 @@ def _parse_args() -> argparse.Namespace:
         help="Number of recent files to include",
     )
 
+    simplify_review_parser = subparsers.add_parser(
+        "simplify-review",
+        help="Run an all-in-one simplify and dedupe review across vault health, structure, and duplicate notes",
+    )
+    simplify_review_parser.add_argument("--json", action="store_true", help="Output JSON instead of markdown")
+    simplify_review_parser.add_argument("--dry-run", action="store_true", help="Print the summary without writing the note")
+    simplify_review_parser.add_argument("--tags-limit", type=int, default=10, help="Number of top tags to include")
+    simplify_review_parser.add_argument(
+        "--unresolved-limit",
+        type=int,
+        default=10,
+        help="Number of unresolved links to include",
+    )
+    simplify_review_parser.add_argument(
+        "--recent-limit",
+        type=int,
+        default=10,
+        help="Number of recent files to include",
+    )
+    simplify_review_parser.add_argument(
+        "--dedupe-limit",
+        type=int,
+        default=12,
+        help="Number of duplicate groups to include in the markdown report",
+    )
+    simplify_review_parser.add_argument(
+        "--hotspot-limit",
+        type=int,
+        default=10,
+        help="Number of hotspot folders to include",
+    )
+    simplify_review_parser.add_argument(
+        "--tldr-max-line",
+        type=int,
+        default=40,
+        help="Maximum number of lines after frontmatter for the TL;DR heading to count as near the top",
+    )
+    simplify_review_parser.add_argument(
+        "--output-path",
+        default=SIMPLIFY_REVIEW_DEFAULT,
+        help=f"Vault-relative markdown report path. Default: {SIMPLIFY_REVIEW_DEFAULT}",
+    )
+
     audit_parser = subparsers.add_parser(
         "audit",
         help="Run policy checks for vault folders, project overviews, TL;DR sections, and frontmatter",
@@ -1977,6 +2394,21 @@ def main() -> None:
             tags_limit=args.tags_limit,
             unresolved_limit=args.unresolved_limit,
             recent_limit=args.recent_limit,
+        )
+        return
+
+    if args.command == "simplify-review":
+        _simplify_review(
+            vault_dir,
+            json_output=args.json,
+            dry_run=args.dry_run,
+            tags_limit=args.tags_limit,
+            unresolved_limit=args.unresolved_limit,
+            recent_limit=args.recent_limit,
+            dedupe_limit=args.dedupe_limit,
+            hotspot_limit=args.hotspot_limit,
+            tldr_max_line=args.tldr_max_line,
+            output_path=args.output_path,
         )
         return
 

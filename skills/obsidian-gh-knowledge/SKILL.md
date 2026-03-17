@@ -274,6 +274,7 @@ For common macOS workflows, prefer the repo-specific helper over hand-building c
 python3 agent-skills/skills/obsidian-gh-knowledge/scripts/local_obsidian_knowledge.py doctor
 python3 agent-skills/skills/obsidian-gh-knowledge/scripts/local_obsidian_knowledge.py dashboard
 python3 agent-skills/skills/obsidian-gh-knowledge/scripts/local_obsidian_knowledge.py review
+python3 agent-skills/skills/obsidian-gh-knowledge/scripts/local_obsidian_knowledge.py simplify-review
 python3 agent-skills/skills/obsidian-gh-knowledge/scripts/local_obsidian_knowledge.py audit
 python3 agent-skills/skills/obsidian-gh-knowledge/scripts/local_obsidian_knowledge.py fix-tldr --dry-run
 python3 agent-skills/skills/obsidian-gh-knowledge/scripts/local_obsidian_knowledge.py structure-report --dry-run
@@ -290,6 +291,7 @@ Wrapper responsibilities:
 - Resolves the local vault path from config.
 - Verifies the official `obsidian` CLI is available.
 - Runs a one-click `review` summary with vault health metrics, task counts, recent files, and unresolved-link samples.
+- Runs a combined `simplify-review` that layers `review`, `audit`, active-scope structure analysis, and duplicate basename/alias detection into one report note.
 - Runs a stricter `audit` for required folders, project `_Overview.md` coverage, `## TL;DR` placement, and YAML frontmatter parsing.
 - Can bulk-insert placeholder `## TL;DR` sections into notes that are missing one.
 - Can generate a local graph-based structure cleanup report for active-scope orphan and dead-end notes without depending on flaky live CLI list output.
