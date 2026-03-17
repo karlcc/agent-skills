@@ -304,6 +304,9 @@ def _run_sync(vault_dir: Path, *, message: str | None, dry_run: bool) -> None:
 
 def _json_command(vault_dir: Path, *args: str, label: str) -> tuple[object, bool]:
     output, _, helper_warning = _obsidian_command(vault_dir, *args)
+    stripped = output.strip()
+    if re.fullmatch(r"No .+ found\.", stripped):
+        return [], helper_warning
     try:
         data = json.loads(output or "[]")
     except json.JSONDecodeError as exc:
