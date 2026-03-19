@@ -47,6 +47,9 @@ AUDIT_SKIP_DIRS = {
     "_archive",
     "node_modules",
 }
+AUDIT_SKIP_FILE_NAMES = {
+    "conflict-files-obsidian-git.md",
+}
 TLDR_SKIP_TOP_LEVEL_DIRS = {
     "agent-skills",
     "help_obsidian_md",
@@ -62,6 +65,7 @@ SIMPLIFY_REVIEW_DEFAULT = "1️⃣-Index/vault-simplify-dedupe-review.md"
 STRUCTURE_ROOT_HUB = Path("1️⃣-Index/vault-operations-index.md")
 STRUCTURE_PROMPT_HUB = Path("1️⃣-Index/prompt-library.md")
 STRUCTURE_CMUX_HUB = Path("1️⃣-Index/cmux-local-workflows-index.md")
+OVERVIEW_MAX_LINES = 200
 PROJECT_DIR_SKIP_NAMES = {
     "archive",
     "_archive",
@@ -323,6 +327,8 @@ def _json_command(vault_dir: Path, *args: str, label: str) -> tuple[object, bool
 
 
 def _should_skip_audit_path(relative_path: Path) -> bool:
+    if relative_path.name in AUDIT_SKIP_FILE_NAMES:
+        return True
     for part in relative_path.parts[:-1]:
         if part.startswith(".") or part in AUDIT_SKIP_DIRS:
             return True
@@ -397,6 +403,10 @@ def _render_sample(item: object) -> str:
             return f"{item['path']}: {item['error']}"
         if "path" in item and "line" in item:
             return f"{item['path']}: line {item['line']}"
+        if "path" in item and "lines" in item:
+            return f"{item['path']}: {item['lines']} lines"
+        if "path" in item and "count" in item:
+            return f"{item['path']}: {item['count']} pending items"
     return str(item)
 
 
@@ -956,6 +966,19 @@ def _find_section_bounds(lines: list[str], heading: str) -> tuple[int, int] | No
     return start, end
 
 
+def _structure_cleanup_inbox_count(lines: list[str]) -> int:
+    bounds = _find_section_bounds(lines, "Structure Cleanup Inbox")
+    if bounds is None:
+        return 0
+    start, end = bounds
+    count = 0
+    for line in lines[start + 1:end]:
+        stripped = line.strip()
+        if stripped.startswith("- [[") or stripped.startswith("- ["):
+            count += 1
+    return count
+
+
 def _text_has_wikilink_target(text: str, target_relative: Path) -> bool:
     target_no_ext = target_relative.with_suffix("").as_posix()
     target_stem = target_relative.stem
@@ -1273,6 +1296,7 @@ def _doctor(vault_dir: Path, *, json_output: bool) -> None:
 def _dashboard_data(vault_dir: Path, *, tags_limit: int) -> dict:
     inbox_paths = _folder_active_markdown_paths(vault_dir, INBOX_DIR)
     draft_paths = _folder_active_markdown_paths(vault_dir, DRAFTS_DIR)
+    active_scope = _structure_analysis(vault_dir, exclude_relative=Path(STRUCTURE_REPORT_DEFAULT))
     stats = {
         "vault": (vault_dir.name),
         "path": str(vault_dir),
@@ -1287,6 +1311,9 @@ def _dashboard_data(vault_dir: Path, *, tags_limit: int) -> dict:
         ),
         "inbox_paths": [path.as_posix() for path in inbox_paths],
         "draft_paths": [path.as_posix() for path in draft_paths],
+        "active_scope_notes": len(active_scope["note_paths_list"]),
+        "active_scope_orphans": len(active_scope["orphans"]),
+        "active_scope_deadends": len(active_scope["deadends"]),
     }
     tags, helper_warning = _json_command(vault_dir, "tags", "counts", "format=json", label="obsidian tags")
     top_tags = sorted(
@@ -1317,8 +1344,11 @@ def _dashboard(vault_dir: Path, *, tags_limit: int, json_output: bool) -> None:
     print(f"Folders: {stats['folders']}")
     print(f"Inbox notes: {stats['inbox_notes']}")
     print(f"Draft notes: {stats['draft_notes']}")
-    print(f"Orphans: {stats['orphans']}")
-    print(f"Dead ends: {stats['deadends']}")
+    print(f"Full-vault orphans: {stats['orphans']}")
+    print(f"Full-vault dead ends: {stats['deadends']}")
+    print(f"Active-scope notes: {stats['active_scope_notes']}")
+    print(f"Active-scope orphans: {stats['active_scope_orphans']}")
+    print(f"Active-scope dead ends: {stats['active_scope_deadends']}")
     print(f"Unresolved links: {stats['unresolved_links']}")
     print("Top tags:")
     if top_tags:
@@ -1381,8 +1411,17 @@ def _review_data(vault_dir: Path, *, tags_limit: int, unresolved_limit: int, rec
             f"{dashboard['draft_notes']} draft {_pluralize(dashboard['draft_notes'], 'note')} {_be_verb(dashboard['draft_notes'])} still unorganized."
         )
     if dashboard["orphans"] > 0:
+        if dashboard["active_scope_orphans"] == 0:
+            flags.append(
+                f"{dashboard['orphans']} {_pluralize(dashboard['orphans'], 'note')} {_be_verb(dashboard['orphans'])} missing inbound links in Obsidian's full-vault graph, but the active note-management scope is clean."
+            )
+        else:
+            flags.append(
+                f"{dashboard['orphans']} {_pluralize(dashboard['orphans'], 'note')} {_be_verb(dashboard['orphans'])} missing inbound links in the full-vault graph."
+            )
+    if dashboard["deadends"] > 0 and dashboard["active_scope_deadends"] == 0:
         flags.append(
-            f"{dashboard['orphans']} {_pluralize(dashboard['orphans'], 'note')} {_be_verb(dashboard['orphans'])} missing inbound links in the full-vault graph."
+            f"{dashboard['deadends']} {_pluralize(dashboard['deadends'], 'note')} {_be_verb(dashboard['deadends'])} showing as dead ends in Obsidian's full-vault graph, but the active note-management scope is clean."
         )
     review["flags"] = flags
     return review
@@ -1414,8 +1453,11 @@ def _review(vault_dir: Path, *, json_output: bool, tags_limit: int, unresolved_l
     print(f"Folders: {dashboard['folders']}")
     print(f"Inbox notes: {dashboard['inbox_notes']}")
     print(f"Draft notes: {dashboard['draft_notes']}")
-    print(f"Orphans: {dashboard['orphans']}")
-    print(f"Dead ends: {dashboard['deadends']}")
+    print(f"Full-vault orphans: {dashboard['orphans']}")
+    print(f"Full-vault dead ends: {dashboard['deadends']}")
+    print(f"Active-scope notes: {dashboard['active_scope_notes']}")
+    print(f"Active-scope orphans: {dashboard['active_scope_orphans']}")
+    print(f"Active-scope dead ends: {dashboard['active_scope_deadends']}")
     print(f"Unresolved links: {dashboard['unresolved_links']}")
     print(f"Open tasks: {review['tasks']['todo']}")
     print(f"Done tasks: {review['tasks']['done']}")
@@ -1550,6 +1592,7 @@ def _simplify_review_markdown(data: dict, *, dedupe_limit: int) -> str:
         f"- Vault review generated on **{data['generated_at']}** for **{doctor['vault_name']}**.",
         f"- Health snapshot: **{dashboard['unresolved_links']}** unresolved links, **{len(audit['issues']['missing_tldr'])}** notes missing `## TL;DR`, and **{structure['counts']['orphans']} / {structure['counts']['deadends']} / {structure['counts']['isolated']}** active-scope orphan/dead-end/isolated notes.",
         f"- Dedupe snapshot: **{dedupe['basename_groups']}** duplicate basename groups and **{dedupe['alias_groups']}** duplicate alias groups across **{dedupe['scope_notes']}** active notes.",
+        f"- Readability snapshot: **{len(audit['issues']['oversized_overviews'])}** oversized overviews and **{len(audit['issues']['cleanup_inbox_backlog'])}** project MOCs with cleanup backlog.",
         "",
         "## Health Snapshot",
         "",
@@ -1646,8 +1689,38 @@ def _simplify_review_markdown(data: dict, *, dedupe_limit: int) -> str:
 
     lines.extend([
         "",
+        "## Readability Hotspots",
+        "",
+        "### Oversized Overviews",
+        "| Overview | Lines |",
+        "| --- | ---: |",
+    ])
+    oversized_overviews = audit["issues"]["oversized_overviews"]
+    if oversized_overviews:
+        for item in oversized_overviews:
+            lines.append(f"| {_structure_note_link(Path(str(item['path'])))} | {item['lines']} |")
+    else:
+        lines.append("| none | 0 |")
+
+    lines.extend([
+        "",
+        "### Cleanup Inbox Backlog",
+        "| Overview | Pending Entries |",
+        "| --- | ---: |",
+    ])
+    cleanup_backlog = audit["issues"]["cleanup_inbox_backlog"]
+    if cleanup_backlog:
+        for item in cleanup_backlog:
+            lines.append(f"| {_structure_note_link(Path(str(item['path'])))} | {item['count']} |")
+    else:
+        lines.append("| none | 0 |")
+
+    lines.extend([
+        "",
         "## Suggested Actions",
         "- Use this report as the first pass. Resolve policy failures and unresolved links before merging or renaming note content.",
+        f"- Treat any `_Overview.md` above {OVERVIEW_MAX_LINES} lines as an index split candidate. Move deep status history or long validation logs into child notes.",
+        "- Empty `Structure Cleanup Inbox` sections after each cleanup pass. A stale inbox means the MOC has become a second backlog instead of a map.",
         "- Review duplicate basename groups next. If two notes represent the same concept, choose one canonical location and convert the other into a redirect, merge, or archive candidate.",
         "- Review duplicate aliases last. Keep a single canonical alias per concept so search and wikilinks stay predictable.",
         "",
@@ -1702,6 +1775,8 @@ def _simplify_review(
     print(f"Missing TL;DR: {len(data['audit']['issues']['missing_tldr'])}")
     print(f"Active-scope orphans: {data['structure']['counts']['orphans']}")
     print(f"Active-scope dead ends: {data['structure']['counts']['deadends']}")
+    print(f"Oversized overviews: {len(data['audit']['issues']['oversized_overviews'])}")
+    print(f"Cleanup backlog overviews: {len(data['audit']['issues']['cleanup_inbox_backlog'])}")
     print(f"Duplicate basename groups: {data['dedupe']['basename_groups']}")
     print(f"Duplicate alias groups: {data['dedupe']['alias_groups']}")
     print("Flags:")
@@ -1741,8 +1816,11 @@ def _audit_data(vault_dir: Path, *, tldr_max_line: int) -> dict:
     frontmatter_errors: list[dict[str, str]] = []
     missing_tldr: list[str] = []
     late_tldr: list[dict[str, int | str]] = []
+    oversized_overviews: list[dict[str, int | str]] = []
+    cleanup_inbox_backlog: list[dict[str, int | str]] = []
     frontmatter_files_checked = 0
     tldr_files_checked = 0
+    overview_files_checked = 0
 
     for relative_path in markdown_files:
         path = vault_dir / relative_path
@@ -1753,6 +1831,13 @@ def _audit_data(vault_dir: Path, *, tldr_max_line: int) -> dict:
             continue
 
         lines = text.splitlines()
+        if relative_path.name == "_Overview.md":
+            overview_files_checked += 1
+            if len(lines) > OVERVIEW_MAX_LINES:
+                oversized_overviews.append({"path": relative_path.as_posix(), "lines": len(lines)})
+            cleanup_count = _structure_cleanup_inbox_count(lines)
+            if cleanup_count > 0:
+                cleanup_inbox_backlog.append({"path": relative_path.as_posix(), "count": cleanup_count})
         frontmatter_block, content_start_index, frontmatter_error = _extract_frontmatter(lines)
         if frontmatter_error:
             frontmatter_errors.append({"path": relative_path.as_posix(), "error": frontmatter_error})
@@ -1803,6 +1888,7 @@ def _audit_data(vault_dir: Path, *, tldr_max_line: int) -> dict:
             "markdown_files_checked": len(markdown_files),
             "tldr_files_checked": tldr_files_checked,
             "frontmatter_files_checked": frontmatter_files_checked,
+            "overview_files_checked": overview_files_checked,
             "tldr_max_line": tldr_max_line,
         },
         "issues": {
@@ -1812,6 +1898,8 @@ def _audit_data(vault_dir: Path, *, tldr_max_line: int) -> dict:
             "frontmatter_errors": frontmatter_errors,
             "missing_tldr": missing_tldr,
             "late_tldr": late_tldr,
+            "oversized_overviews": oversized_overviews,
+            "cleanup_inbox_backlog": cleanup_inbox_backlog,
         },
     }
 
@@ -1840,6 +1928,15 @@ def _audit_data(vault_dir: Path, *, tldr_max_line: int) -> dict:
         flags.append(
             f"{len(late_tldr)} {_pluralize(len(late_tldr), 'note')} {_be_verb(len(late_tldr))} placing TL;DR too far from the top."
         )
+    if oversized_overviews:
+        flags.append(
+            f"{len(oversized_overviews)} project {_pluralize(len(oversized_overviews), '_Overview.md')} {_be_verb(len(oversized_overviews))} over {OVERVIEW_MAX_LINES} lines and should be split or trimmed."
+        )
+    if cleanup_inbox_backlog:
+        cleanup_total = sum(int(item["count"]) for item in cleanup_inbox_backlog)
+        flags.append(
+            f"{len(cleanup_inbox_backlog)} project {_pluralize(len(cleanup_inbox_backlog), '_Overview.md')} {_be_verb(len(cleanup_inbox_backlog))} still carrying {cleanup_total} pending Structure Cleanup Inbox {_pluralize(cleanup_total, 'item')}."
+        )
     if unresolved_links > 0:
         flags.append(
             f"{unresolved_links} unresolved {_pluralize(unresolved_links, 'link')} {_be_verb(unresolved_links)} still present."
@@ -1867,6 +1964,7 @@ def _audit(vault_dir: Path, *, json_output: bool, limit: int, tldr_max_line: int
     print("CLI ready: yes")
     print(f"Markdown files checked: {summary['markdown_files_checked']}")
     print(f"Project folders checked: {summary['project_folders_checked']}")
+    print(f"Overview files checked: {summary['overview_files_checked']}")
     print(f"TL;DR checks: {summary['tldr_files_checked']}")
     print(f"Frontmatter checks: {summary['frontmatter_files_checked']}")
     print(f"Unresolved links: {obsidian['unresolved_links']}")
@@ -1880,6 +1978,8 @@ def _audit(vault_dir: Path, *, json_output: bool, limit: int, tldr_max_line: int
     _print_samples("Frontmatter errors", issues["frontmatter_errors"], limit=limit)
     _print_samples("Missing TL;DR", issues["missing_tldr"], limit=limit)
     _print_samples("Late TL;DR", issues["late_tldr"], limit=limit)
+    _print_samples("Oversized overviews", issues["oversized_overviews"], limit=limit)
+    _print_samples("Cleanup inbox backlog", issues["cleanup_inbox_backlog"], limit=limit)
     print("Flags:")
     if audit["flags"]:
         for flag in audit["flags"]:

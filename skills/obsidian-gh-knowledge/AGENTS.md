@@ -21,11 +21,12 @@ This folder is the source for the `obsidian-gh-knowledge` skill.
 - Local CLI wrapper: `scripts/local_obsidian_knowledge.py`
 - GitHub mode script: `scripts/github_knowledge_skill.py`
 - Commands: `doctor`, `dashboard`, `review`, `simplify-review`, `audit`, `fix-tldr`, `structure-report`, `structure-fix`, `archive-fix`, `capture`, `project-note`, `organize`, `sync`, plus GitHub-mode `list`, `read`, `search`, `move`, `copy`, `write`
+- Default health command: `simplify-review` for readability/tracking resilience. `dashboard` and `review` expose Obsidian full-vault counts; `structure-report` and the readability checks focus on active-scope cleanup.
 
 ## Files
 
 - `scripts/init_local_vault.py`: Clone a confirmed vault repo into `~/Documents/<repo-name>` and wire local config for first-run setup.
-- `scripts/local_obsidian_knowledge.py`: Repo-specific local macOS wrapper around the official Obsidian CLI for health checks, one-click vault review, combined simplify/dedupe review reports, stricter vault audits, bulk TL;DR normalization, local structure cleanup reporting/fixes, archive index cleanup, note capture, project-scoped note creation, note organization, and git sync.
+- `scripts/local_obsidian_knowledge.py`: Repo-specific local macOS wrapper around the official Obsidian CLI for health checks, one-click vault review, combined simplify/dedupe/readability review reports, stricter vault audits, bulk TL;DR normalization, local structure cleanup reporting/fixes, archive index cleanup, note capture, project-scoped note creation, note organization, and git sync.
 - `scripts/github_knowledge_skill.py`: GitHub-backed single-file operations.
 - `references/obsidian-organizer.md`: Organizing workflow reference.
 

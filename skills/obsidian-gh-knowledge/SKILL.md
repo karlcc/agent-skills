@@ -1,6 +1,6 @@
 ---
 name: obsidian-gh-knowledge
-description: Bootstrap and operate an Obsidian vault with official Obsidian CLI first (local), with local filesystem/git fallback, and GitHub API fallback when local access is unavailable. Use for first-run workspace init from a confirmed vault repo URL, wiring `~/.config/obsidian-gh-knowledge/config.json`, and for listing, reading, searching, creating/updating, and moving notes in Obsidian vaults.
+description: Bootstrap and operate an Obsidian vault with official Obsidian CLI first (local), with local filesystem/git fallback, and GitHub API fallback when local access is unavailable. Use for first-run workspace init from a confirmed vault repo URL, wiring `~/.config/obsidian-gh-knowledge/config.json`, auditing vault health and readability (TL;DR coverage, structure cleanup backlog, oversized project overviews, graph health), and for listing, reading, searching, creating/updating, and moving notes in Obsidian vaults.
 ---
 
 # Obsidian GH Knowledge (CLI-first)
@@ -11,6 +11,7 @@ description: Bootstrap and operate an Obsidian vault with official Obsidian CLI 
 - **Agent Rules:** Agents **must** read before write, include a `## TL;DR`, and **must** use Mermaid diagrams for visual explanations.
 - **Project Scoping:** When working on a specific project (cmux, trends, etc.), **stay within that project's folder** under `5️⃣-Projects/GitHub/<project>/`. See "Project Scoping (CRITICAL)" section below.
 - **Local Wrapper:** Use `scripts/local_obsidian_knowledge.py` for repeatable local macOS workflows that combine Obsidian CLI operations with this vault's project rules and git sync.
+- **Health Default:** Use `simplify-review` first when the vault feels hard to read or hard to trust; it reconciles full-vault Obsidian counts with active-scope graph checks and overview readability audits.
 
 ## Execution Mode Flowchart
 
@@ -291,8 +292,9 @@ Wrapper responsibilities:
 - Resolves the local vault path from config.
 - Verifies the official `obsidian` CLI is available.
 - Runs a one-click `review` summary with vault health metrics, task counts, recent files, and unresolved-link samples.
-- Runs a combined `simplify-review` that layers `review`, `audit`, active-scope structure analysis, and duplicate basename/alias detection into one report note.
-- Runs a stricter `audit` for required folders, project `_Overview.md` coverage, `## TL;DR` placement, and YAML frontmatter parsing.
+- Treats `dashboard` and `review` orphan/dead-end numbers as Obsidian full-vault signals, not the precise cleanup scope for active notes.
+- Runs a combined `simplify-review` that layers `review`, `audit`, active-scope structure analysis, overview readability checks, and duplicate basename/alias detection into one report note.
+- Runs a stricter `audit` for required folders, project `_Overview.md` coverage, `## TL;DR` placement, oversized MOCs, stale `Structure Cleanup Inbox` backlogs, and YAML frontmatter parsing.
 - Can bulk-insert placeholder `## TL;DR` sections into notes that are missing one.
 - Can generate a local graph-based structure cleanup report for active-scope orphan and dead-end notes without depending on flaky live CLI list output.
 - Can apply high-confidence structure fixes by linking dead-end notes to their nearest `_Overview.md` and adding orphan notes to auto-generated cleanup sections inside project MOCs.
