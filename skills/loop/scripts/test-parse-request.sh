@@ -27,6 +27,11 @@ assert_eq "leading_interval" "$(jq -r '.parse_mode' <<<"$json")" "leading interv
 assert_eq "5m" "$(jq -r '.interval' <<<"$json")" "leading interval value"
 assert_eq "/babysit-prs" "$(jq -r '.prompt' <<<"$json")" "leading interval prompt"
 
+json="$(parse '/loop 15m check the deploy')"
+assert_eq "add" "$(jq -r '.action' <<<"$json")" "/loop action"
+assert_eq "15m" "$(jq -r '.interval' <<<"$json")" "/loop interval"
+assert_eq "check the deploy" "$(jq -r '.prompt' <<<"$json")" "/loop prompt"
+
 json="$(parse 'check the deploy every 20m')"
 assert_eq "add" "$(jq -r '.action' <<<"$json")" "trailing every action"
 assert_eq "trailing_every" "$(jq -r '.parse_mode' <<<"$json")" "trailing every parse mode"
@@ -61,4 +66,4 @@ assert_eq "check the deploy" "$(jq -r '.prompt' <<<"$json")" "explicit field pro
 assert_eq "true" "$(jq -r '.dry_run' <<<"$json")" "dry-run modifier"
 assert_eq "false" "$(jq -r '.run_now' <<<"$json")" "run-now suppression"
 
-echo "8/8 parser assertions passed"
+echo "11/11 parser assertions passed"

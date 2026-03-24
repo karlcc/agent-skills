@@ -61,16 +61,38 @@ if ! JOB_JSON="$(loop_get_job_json "$JOB_ID" 2>/dev/null)"; then
 fi
 
 PLIST_PATH="$(jq -r '.plist_path // empty' <<<"$JOB_JSON")"
+BACKEND="$(jq -r '.backend // empty' <<<"$JOB_JSON")"
+LAUNCHER_PATH="$(jq -r '.launcher_path // empty' <<<"$JOB_JSON")"
+TASK_NAME="$(jq -r '.task_name // empty' <<<"$JOB_JSON")"
+TASK_WRAPPER_PATH="$(jq -r '.task_wrapper_path // empty' <<<"$JOB_JSON")"
 LOG_PATH="$(jq -r '.log_path // empty' <<<"$JOB_JSON")"
 ERROR_LOG_PATH="$(jq -r '.error_log_path // empty' <<<"$JOB_JSON")"
 
 if ! $DRY_RUN; then
-  if [[ -n "$PLIST_PATH" && -f "$PLIST_PATH" ]]; then
-    loop_unregister_launchd_job "$PLIST_PATH"
-    rm -f "$PLIST_PATH"
-  fi
+  case "$BACKEND" in
+    launchd)
+      if [[ -n "$PLIST_PATH" && -f "$PLIST_PATH" ]]; then
+        loop_unregister_launchd_job "$PLIST_PATH"
+        rm -f "$PLIST_PATH"
+      fi
+      ;;
+    cron)
+      loop_unregister_cron_job "$JOB_ID"
+      ;;
+    task-scheduler)
+      if [[ -n "$TASK_NAME" ]]; then
+        loop_unregister_task_scheduler_job "$TASK_NAME"
+      fi
+      ;;
+  esac
 
   loop_remove_job_from_registry "$JOB_ID"
+  if [[ -n "$LAUNCHER_PATH" ]]; then
+    rm -f "$LAUNCHER_PATH"
+  fi
+  if [[ -n "$TASK_WRAPPER_PATH" ]]; then
+    rm -f "$TASK_WRAPPER_PATH"
+  fi
 
   if $PURGE_LOGS; then
     rm -f "$LOG_PATH" "$ERROR_LOG_PATH"

@@ -1,56 +1,144 @@
 ---
 name: ralph-loop
-description: Keep Codex iterating on a task until a completion promise is detected or max iterations reached. Use when told to "ralph loop", "keep working", or "iterate until done".
-argument-hint: "<prompt> [--max-iterations N] [--completion-promise TEXT]"
-user-invocable: true
+description: Keep Codex iterating on the same bounded task until a completion signal appears in the assistant output or a maximum iteration count is reached. Use when the user asks for a Ralph Loop, asks Codex to keep going until done, or wants to prevent premature stopping on a task that should stay in the current workspace.
+allowed-tools:
+  - Bash
 ---
 
-## When to use
+# Ralph Loop
 
-Use this skill when the user wants Codex to keep working on a task iteratively
-until a specific completion condition is met. This is useful for:
-- Deep iterative development (build, test, fix cycles)
-- Complex refactoring that requires multiple passes
-- Tasks where the agent tends to stop prematurely
+Use this skill with an explicit mention such as:
 
-## Inputs / context to gather
+`$ralph-loop Fix the failing tests and stop only when they pass`
 
-1. **PROMPT**: The task description (required, via `$ARGUMENTS`)
-2. **--max-iterations**: Maximum number of iterations before stopping (default: 50)
-3. **--completion-promise**: Text that signals task completion (default: "DONE")
+Optional conventions in the user message:
+
+- `--max-iterations N`
+- `--completion-promise TEXT`
+
+Defaults:
+
+- max iterations: `50`
+- completion promise: `DONE`
+- completion signal written in the assistant message: `<promise>DONE</promise>`
+
+## What this skill does
+
+This skill writes a workspace-local state file at `.codex/ralph-loop-state.json`.
+A user-scope Stop-hook dispatcher in `~/.codex/hooks.json` reads that state file
+after each assistant response. If the completion signal is missing and the max
+iteration limit has not been reached, the Stop hook blocks the turn and feeds a
+continuation prompt back to Codex.
+
+This is a simple utility loop. It is not a replacement for higher-level
+orchestration systems such as cmux Autopilot.
+
+## User-scope install
+
+Install the skill bundle and home Stop-hook helpers into `~/.codex/` with:
+
+```bash
+bash scripts/install-user-scope.sh
+```
+
+Optional flags:
+
+- `--codex-home /absolute/path/to/.codex`
+- `--mode copy|symlink`
+
+Install behavior:
+
+- installs the skill bundle into `~/.codex/skills/ralph-loop`
+- installs `~/.codex/hooks/ralph-loop-stop.sh`
+- installs `~/.codex/hooks/managed-stop-dispatch.sh`
+- enables `codex_hooks = true` in `~/.codex/config.toml`
+- preserves an existing cmux-managed `~/.codex/hooks.json` if it already points
+  to `cmux-stop-dispatch.sh`
+
+If cmux already owns the home Stop hook, Ralph Loop still works after install by
+letting the cmux dispatcher fall back to the home Ralph hook.
 
 ## Procedure
 
-1. Parse arguments from `$ARGUMENTS`
-2. Create `.codex/ralph-loop-state.json` with:
-   - `active: true`
-   - `prompt`: the original user prompt
-   - `iteration: 0`
-   - `max_iterations`: from arg or default 50
-   - `completion_promise`: from arg or default "DONE"
-   - `started_at`: current ISO timestamp
-3. The Stop hook (`scripts/stop-hook.sh`) is registered in your config.toml
-4. Work on the task normally
-5. When your turn would end, the Stop hook intercepts:
-   - If completion promise found in your output → stop allowed
-   - If max iterations reached → stop allowed
-   - Otherwise → stop blocked, you receive the original prompt again
+1. Parse the user request after `$ralph-loop`.
+2. Resolve:
+   - the task prompt
+   - `max_iterations`
+   - `completion_promise`
+3. Resolve the active task workspace path first.
+4. Run `scripts/start-loop.sh` from this skill directory and pass the workspace
+   explicitly with `--workspace`.
+4. Confirm the state file exists at `.codex/ralph-loop-state.json`.
+5. Work the task normally in the current workspace.
+6. When the task is actually complete, include the exact completion signal in
+   the final assistant message.
 
-## Completion Signal
+## Required command
 
-When you have finished the task, output:
+Run this helper from the skill root:
 
+```bash
+bash scripts/start-loop.sh \
+  --workspace "/absolute/path/to/current/workspace" \
+  --max-iterations 50 \
+  --completion-promise DONE \
+  --prompt "TASK GOES HERE"
+```
+
+If the user supplied explicit values, pass those instead of the defaults. Do not
+rely on the helper's current working directory; always pass the workspace path
+explicitly.
+
+## Continuation rules
+
+- Stay on the same task across continuation prompts.
+- Continue from the current workspace state; do not restart from scratch.
+- Prefer concrete progress each iteration: inspect, edit, verify, repeat.
+- Use the loop for bounded tasks. If the user is really asking for broad
+  orchestration, background supervision, or multi-agent management, stop and use
+  a different workflow instead.
+
+## Conflict boundaries
+
+- `$ralph-loop` and `$loop` are not substitutes.
+- `ralph-loop` owns same-session continuation through the Stop hook.
+- `loop` owns recurring fresh-session scheduling and should not install or edit
+  Stop hooks.
+- cmux autopilot uses the same Stop-hook channel as Ralph Loop, so only one
+  home dispatcher should own `~/.codex/hooks.json` at a time.
+- When cmux owns the home dispatcher, Ralph Loop should install only its home
+  stop hook and let the cmux dispatcher delegate to it.
+
+## Completion
+
+When you are done, emit the exact completion signal:
+
+```text
 <promise>DONE</promise>
+```
 
-## Efficiency plan
+If the user chose a different completion promise, emit that exact tag instead.
 
-- Work methodically: plan → implement → test → fix in each iteration
-- Don't repeat the same approach if it failed
-- Use the iteration count in the block message to track progress
-- Signal completion as soon as the core task is verifiably done
+## Cancel or inspect
 
-## Verification checklist
+- Cancel the loop:
 
-- [ ] `.codex/ralph-loop-state.json` exists and is valid JSON
-- [ ] Stop hook returns valid `StopOutcome` JSON
-- [ ] Completion promise detection works
+```bash
+bash scripts/start-loop.sh --workspace "/absolute/path/to/current/workspace" --cancel
+```
+
+- Show the current state:
+
+```bash
+bash scripts/start-loop.sh --workspace "/absolute/path/to/current/workspace" --show
+```
+
+## Verification
+
+To verify the hook logic without launching a nested Codex session:
+
+```bash
+bash scripts/test-stop-hook.sh
+bash scripts/test-managed-stop-dispatch.sh
+bash scripts/test-install-user-scope.sh
+```

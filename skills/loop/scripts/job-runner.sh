@@ -8,12 +8,13 @@ source "$SCRIPT_DIR/common.sh"
 usage() {
   cat <<'EOF'
 Usage:
-  job-runner.sh --job-id ID [--trigger scheduled|manual]
+  job-runner.sh --job-id ID [--trigger scheduled|manual] [--check-due]
 EOF
 }
 
 JOB_ID=""
 TRIGGER="scheduled"
+CHECK_DUE=false
 
 while (($# > 0)); do
   case "$1" in
@@ -26,6 +27,9 @@ while (($# > 0)); do
       shift
       loop_require_value "--trigger" "${1:-}"
       TRIGGER="$1"
+      ;;
+    --check-due)
+      CHECK_DUE=true
       ;;
     --help|-h)
       usage
@@ -53,9 +57,25 @@ WORKSPACE="$(jq -r '.workspace' <<<"$JOB_JSON")"
 PROMPT="$(jq -r '.prompt' <<<"$JOB_JSON")"
 LOG_PATH="$(jq -r '.log_path' <<<"$JOB_JSON")"
 ERROR_LOG_PATH="$(jq -r '.error_log_path' <<<"$JOB_JSON")"
+COMMAND_TEMPLATE="$(jq -r '.command_template // empty' <<<"$JOB_JSON")"
 
 mkdir -p "$(dirname "$LOG_PATH")"
 mkdir -p "$(dirname "$ERROR_LOG_PATH")"
+
+if $CHECK_DUE; then
+  NOW_EPOCH="$(loop_now_epoch)"
+  if [[ "$(loop_job_is_due_now "$JOB_JSON" "$NOW_EPOCH")" != "true" ]]; then
+    exit 0
+  fi
+fi
+
+if ! loop_acquire_job_lock "$JOB_ID"; then
+  {
+    printf '[%s] skipped job %s trigger=%s reason=already-running\n' "$(loop_now_utc)" "$JOB_ID" "$TRIGGER"
+  } >>"$LOG_PATH"
+  exit 0
+fi
+trap 'loop_release_job_lock "$JOB_ID"' EXIT
 
 STARTED_AT="$(loop_now_utc)"
 loop_update_job_started "$JOB_ID" "$TRIGGER" "$STARTED_AT"
@@ -69,7 +89,11 @@ if [[ ! -d "$WORKSPACE" ]]; then
   exit 1
 fi
 
-COMMAND_STRING="$(loop_build_codex_command "$WORKSPACE" "$PROMPT")"
+if [[ -z "$COMMAND_TEMPLATE" ]]; then
+  COMMAND_STRING="$(loop_build_codex_command "$WORKSPACE" "$PROMPT" "$JOB_ID")"
+else
+  COMMAND_STRING="$(loop_build_command_from_template "$COMMAND_TEMPLATE" "$WORKSPACE" "$PROMPT" "$JOB_ID")"
+fi
 
 {
   printf '[%s] starting job %s trigger=%s\n' "$STARTED_AT" "$JOB_ID" "$TRIGGER"

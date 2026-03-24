@@ -64,7 +64,12 @@ fi
 
 WORKSPACE="$(jq -r '.workspace' <<<"$JOB_JSON")"
 PROMPT="$(jq -r '.prompt' <<<"$JOB_JSON")"
-COMMAND_STRING="$(loop_build_codex_command "$WORKSPACE" "$PROMPT")"
+COMMAND_TEMPLATE="$(jq -r '.command_template // empty' <<<"$JOB_JSON")"
+if [[ -n "$COMMAND_TEMPLATE" ]]; then
+  COMMAND_STRING="$(loop_build_command_from_template "$COMMAND_TEMPLATE" "$WORKSPACE" "$PROMPT" "$JOB_ID")"
+else
+  COMMAND_STRING="$(loop_build_codex_command "$WORKSPACE" "$PROMPT" "$JOB_ID")"
+fi
 
 if $DRY_RUN; then
   if $JSON_OUTPUT; then

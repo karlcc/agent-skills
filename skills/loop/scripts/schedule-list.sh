@@ -43,9 +43,9 @@ if [[ "$JOB_COUNT" == "0" ]]; then
   exit 0
 fi
 
-printf '%-24s %-8s %-10s %-8s %s\n' "JOB ID" "INTERVAL" "STATUS" "RUNS" "PROMPT"
+printf '%-24s %-15s %-8s %-10s %-8s %s\n' "JOB ID" "BACKEND" "INTERVAL" "STATUS" "RUNS" "PROMPT"
 loop_list_jobs_json \
-  | jq -r '.[] | [.id, .interval, (.last_status // "scheduled"), ((.run_count // 0) | tostring), .prompt] | @tsv' \
-  | while IFS=$'\t' read -r job_id interval status run_count prompt; do
-      printf '%-24s %-8s %-10s %-8s %s\n' "$job_id" "$interval" "$status" "$run_count" "$prompt"
+  | jq -r '.[] | [.id, (.backend // "unknown"), .interval, (.last_status // "scheduled"), ((.run_count // 0) | tostring), .prompt] | @tsv' \
+  | while IFS=$'\t' read -r job_id backend interval status run_count prompt; do
+      printf '%-24s %-15s %-8s %-10s %-8s %s\n' "$job_id" "$backend" "$interval" "$status" "$run_count" "$prompt"
     done

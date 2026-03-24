@@ -54,7 +54,7 @@ def normalize_interval(count: str, unit: str) -> str:
 
 
 def strip_leading_skill_token(text: str) -> str:
-    return re.sub(r"^\s*\$loop\b[:\s-]*", "", text, flags=re.IGNORECASE).strip()
+    return re.sub(r"^\s*(?:\$|/)?loop\b[:\s-]*", "", text, flags=re.IGNORECASE).strip()
 
 
 def strip_soft_wrappers(text: str) -> str:

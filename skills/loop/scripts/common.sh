@@ -14,8 +14,16 @@ loop_require_value() {
   fi
 }
 
+loop_codex_home() {
+  if [[ -n "${CODEX_HOME:-}" ]]; then
+    printf '%s\n' "$CODEX_HOME"
+  else
+    printf '%s/.codex\n' "$HOME"
+  fi
+}
+
 loop_state_dir() {
-  printf '%s\n' "${LOOP_STATE_DIR:-$HOME/.codex/loop-scheduler}"
+  printf '%s\n' "${LOOP_STATE_DIR:-$(loop_codex_home)/loop-scheduler}"
 }
 
 loop_jobs_file() {
@@ -26,11 +34,24 @@ loop_logs_dir() {
   printf '%s\n' "${LOOP_LOG_DIR:-$(loop_state_dir)/logs}"
 }
 
+loop_launchers_dir() {
+  printf '%s\n' "${LOOP_LAUNCHERS_DIR:-$(loop_state_dir)/launchers}"
+}
+
+loop_windows_wrappers_dir() {
+  printf '%s\n' "${LOOP_WINDOWS_WRAPPERS_DIR:-$(loop_state_dir)/windows-wrappers}"
+}
+
 loop_plist_dir() {
   printf '%s\n' "${LOOP_PLIST_DIR:-$HOME/Library/LaunchAgents}"
 }
 
 loop_backend() {
+  if [[ -n "${LOOP_BACKEND:-}" ]]; then
+    printf '%s\n' "$LOOP_BACKEND"
+    return 0
+  fi
+
   case "$(uname -s)" in
     Darwin)
       printf 'launchd\n'
@@ -47,8 +68,23 @@ loop_backend() {
   esac
 }
 
+loop_dispatch_interval_seconds() {
+  local seconds="${LOOP_DISPATCH_INTERVAL_SECONDS:-60}"
+  if ! [[ "$seconds" =~ ^[0-9]+$ ]]; then
+    loop_error "LOOP_DISPATCH_INTERVAL_SECONDS must be a non-negative integer"
+  fi
+  if ((seconds < 60)); then
+    seconds=60
+  fi
+  printf '%s\n' "$seconds"
+}
+
 loop_now_utc() {
   date -u +"%Y-%m-%dT%H:%M:%SZ"
+}
+
+loop_now_epoch() {
+  date +%s
 }
 
 loop_realpath_dir() {
@@ -78,33 +114,22 @@ loop_registry_lock_owner_file() {
   printf '%s/owner' "$(loop_registry_lock_dir)"
 }
 
-loop_write_registry_lock_owner() {
+loop_write_lock_owner() {
   local owner_file="$1"
   cat >"$owner_file" <<EOF
 pid=$$
-started_at_epoch=$(date +%s)
+started_at_epoch=$(loop_now_epoch)
 host=$(hostname)
 EOF
 }
 
-loop_registry_lock_owner_value() {
-  local key="$1"
-  local owner_file
-
-  owner_file="$(loop_registry_lock_owner_file)"
+loop_lock_owner_value() {
+  local owner_file="$1"
+  local key="$2"
   if [[ ! -f "$owner_file" ]]; then
     return 1
   fi
-
   awk -F= -v key="$key" '$1 == key { print $2; exit }' "$owner_file"
-}
-
-loop_registry_lock_owner_pid() {
-  loop_registry_lock_owner_value "pid"
-}
-
-loop_registry_lock_started_at_epoch() {
-  loop_registry_lock_owner_value "started_at_epoch"
 }
 
 loop_pid_is_alive() {
@@ -113,20 +138,21 @@ loop_pid_is_alive() {
   kill -0 "$pid" 2>/dev/null
 }
 
-loop_registry_lock_is_stale() {
+loop_lock_is_stale() {
+  local owner_file="$1"
   local started_at_epoch pid now age stale_seconds
 
-  started_at_epoch="$(loop_registry_lock_started_at_epoch 2>/dev/null || true)"
+  started_at_epoch="$(loop_lock_owner_value "$owner_file" "started_at_epoch" 2>/dev/null || true)"
   [[ "$started_at_epoch" =~ ^[0-9]+$ ]] || return 1
 
   stale_seconds="$(loop_lock_stale_seconds)"
-  now="$(date +%s)"
+  now="$(loop_now_epoch)"
   age=$((now - started_at_epoch))
   if ((age < stale_seconds)); then
     return 1
   fi
 
-  pid="$(loop_registry_lock_owner_pid 2>/dev/null || true)"
+  pid="$(loop_lock_owner_value "$owner_file" "pid" 2>/dev/null || true)"
   if [[ -z "$pid" ]]; then
     return 0
   fi
@@ -136,6 +162,10 @@ loop_registry_lock_is_stale() {
   fi
 
   return 1
+}
+
+loop_registry_lock_owner_pid() {
+  loop_lock_owner_value "$(loop_registry_lock_owner_file)" "pid"
 }
 
 loop_acquire_registry_lock() {
@@ -148,11 +178,11 @@ loop_acquire_registry_lock() {
 
   while true; do
     if mkdir "$lock_dir" 2>/dev/null; then
-      loop_write_registry_lock_owner "$(loop_registry_lock_owner_file)"
+      loop_write_lock_owner "$(loop_registry_lock_owner_file)"
       return 0
     fi
 
-    if loop_registry_lock_is_stale; then
+    if loop_lock_is_stale "$(loop_registry_lock_owner_file)"; then
       rm -rf "$lock_dir"
       continue
     fi
@@ -209,6 +239,67 @@ loop_registry_debug_delay() {
   if [[ -n "$delay" ]]; then
     sleep "$delay"
   fi
+}
+
+loop_job_locks_dir() {
+  printf '%s\n' "$(loop_state_dir)/job-locks"
+}
+
+loop_job_lock_dir_from_id() {
+  printf '%s/%s.lock\n' "$(loop_job_locks_dir)" "$1"
+}
+
+loop_job_lock_owner_file_from_id() {
+  printf '%s/owner' "$(loop_job_lock_dir_from_id "$1")"
+}
+
+loop_job_lock_owner_pid() {
+  loop_lock_owner_value "$(loop_job_lock_owner_file_from_id "$1")" "pid"
+}
+
+loop_job_lock_is_stale() {
+  loop_lock_is_stale "$(loop_job_lock_owner_file_from_id "$1")"
+}
+
+loop_acquire_job_lock() {
+  local job_id="$1"
+  local lock_dir owner_file
+
+  mkdir -p "$(loop_job_locks_dir)"
+  lock_dir="$(loop_job_lock_dir_from_id "$job_id")"
+  owner_file="$(loop_job_lock_owner_file_from_id "$job_id")"
+
+  if mkdir "$lock_dir" 2>/dev/null; then
+    loop_write_lock_owner "$owner_file"
+    return 0
+  fi
+
+  if loop_job_lock_is_stale "$job_id"; then
+    rm -rf "$lock_dir"
+    if mkdir "$lock_dir" 2>/dev/null; then
+      loop_write_lock_owner "$owner_file"
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
+loop_release_job_lock() {
+  local job_id="$1"
+  local lock_dir owner_pid
+
+  lock_dir="$(loop_job_lock_dir_from_id "$job_id")"
+  if [[ ! -d "$lock_dir" ]]; then
+    return 0
+  fi
+
+  owner_pid="$(loop_job_lock_owner_pid "$job_id" 2>/dev/null || true)"
+  if [[ -n "$owner_pid" && "$owner_pid" != "$$" ]]; then
+    loop_error "Refusing to release loop job lock owned by pid $owner_pid"
+  fi
+
+  rm -rf "$lock_dir"
 }
 
 loop_generate_id() {
@@ -268,6 +359,22 @@ loop_error_log_path_from_id() {
   printf '%s/%s.err.log\n' "$(loop_logs_dir)" "$1"
 }
 
+loop_launcher_path_from_id() {
+  printf '%s/%s.sh\n' "$(loop_launchers_dir)" "$1"
+}
+
+loop_cron_tag_from_id() {
+  printf '# codex-loop:%s' "$1"
+}
+
+loop_task_name_from_id() {
+  printf 'CodexLoop-%s\n' "$1"
+}
+
+loop_task_wrapper_path_from_id() {
+  printf '%s/%s.cmd\n' "$(loop_windows_wrappers_dir)" "$1"
+}
+
 loop_xml_escape() {
   printf '%s' "$1" | sed \
     -e 's/&/\&amp;/g' \
@@ -280,10 +387,17 @@ loop_xml_escape() {
 loop_init_registry() {
   mkdir -p "$(loop_state_dir)"
   mkdir -p "$(loop_logs_dir)"
+  mkdir -p "$(loop_launchers_dir)"
+  mkdir -p "$(loop_job_locks_dir)"
 
-  if [[ "$(loop_backend)" == "launchd" ]]; then
-    mkdir -p "$(loop_plist_dir)"
-  fi
+  case "$(loop_backend)" in
+    launchd)
+      mkdir -p "$(loop_plist_dir)"
+      ;;
+    task-scheduler)
+      mkdir -p "$(loop_windows_wrappers_dir)"
+      ;;
+  esac
 
   if [[ ! -f "$(loop_jobs_file)" ]]; then
     printf '[]\n' >"$(loop_jobs_file)"
@@ -427,29 +541,158 @@ loop_update_job_finished() {
   loop_with_registry_lock loop_update_job_finished_unlocked "$1" "$2" "$3" "$4"
 }
 
-loop_build_codex_command() {
-  local workspace="$1"
-  local prompt="$2"
-  local codex_bin="${LOOP_CODEX_BIN:-codex}"
-  local exec_args="${LOOP_CODEX_EXEC_ARGS:---full-auto}"
+loop_iso_to_epoch() {
+  local iso_value="$1"
+  python3 - "$iso_value" <<'PY'
+import datetime
+import sys
 
-  local quoted_bin quoted_workspace quoted_prompt
-  quoted_bin="$(printf '%q' "$codex_bin")"
-  quoted_workspace="$(printf '%q' "$workspace")"
-  quoted_prompt="$(printf '%q' "$prompt")"
+value = sys.argv[1]
+if not value:
+    raise SystemExit(1)
+if value.endswith("Z"):
+    value = value[:-1] + "+00:00"
+print(int(datetime.datetime.fromisoformat(value).timestamp()))
+PY
+}
+
+loop_job_is_due_now() {
+  local job_json="$1"
+  local now_epoch="$2"
+
+  python3 - "$job_json" "$now_epoch" <<'PY'
+import datetime
+import json
+import sys
+
+job = json.loads(sys.argv[1])
+now_epoch = int(sys.argv[2])
+interval_seconds = int(job.get("interval_seconds") or 0)
+anchor = job.get("last_run_started_at") or job.get("created_at")
+
+if not anchor or interval_seconds <= 0:
+    print("true")
+    raise SystemExit(0)
+
+if anchor.endswith("Z"):
+    anchor = anchor[:-1] + "+00:00"
+
+anchor_epoch = int(datetime.datetime.fromisoformat(anchor).timestamp())
+print("true" if now_epoch - anchor_epoch >= interval_seconds else "false")
+PY
+}
+
+loop_default_command_template() {
+  local agent_bin="${LOOP_AGENT_BIN:-${LOOP_CODEX_BIN:-codex}}"
+  local exec_args="${LOOP_AGENT_EXEC_ARGS:-${LOOP_CODEX_EXEC_ARGS:---full-auto}}"
 
   if [[ -n "$exec_args" ]]; then
-    printf '%s exec -C %s --skip-git-repo-check %s %s\n' \
-      "$quoted_bin" \
-      "$quoted_workspace" \
-      "$exec_args" \
-      "$quoted_prompt"
+    printf '%s exec -C {workspace} --skip-git-repo-check %s {prompt}\n' "$agent_bin" "$exec_args"
   else
-    printf '%s exec -C %s --skip-git-repo-check %s\n' \
-      "$quoted_bin" \
-      "$quoted_workspace" \
-      "$quoted_prompt"
+    printf '%s exec -C {workspace} --skip-git-repo-check {prompt}\n' "$agent_bin"
   fi
+}
+
+loop_command_template() {
+  if [[ -n "${LOOP_COMMAND_TEMPLATE:-}" ]]; then
+    printf '%s\n' "$LOOP_COMMAND_TEMPLATE"
+  else
+    loop_default_command_template
+  fi
+}
+
+loop_build_command_from_template() {
+  local template="$1"
+  local workspace="$2"
+  local prompt="$3"
+  local job_id="${4:-}"
+
+  local quoted_workspace quoted_prompt quoted_job_id rendered
+  quoted_workspace="$(printf '%q' "$workspace")"
+  quoted_prompt="$(printf '%q' "$prompt")"
+  quoted_job_id="$(printf '%q' "$job_id")"
+
+  rendered="$template"
+  rendered="${rendered//\{workspace\}/$quoted_workspace}"
+  rendered="${rendered//\{prompt\}/$quoted_prompt}"
+  rendered="${rendered//\{job_id\}/$quoted_job_id}"
+  printf '%s\n' "$rendered"
+}
+
+loop_build_codex_command() {
+  loop_build_command_from_template "$(loop_command_template)" "$1" "$2" "${3:-}"
+}
+
+loop_write_job_launcher() {
+  local job_id="$1"
+  local runner_script="$2"
+  local launcher_path state_dir logs_dir jobs_file command_template timeout_seconds stale_seconds
+  local quoted_runner quoted_job_id quoted_state_dir quoted_logs_dir quoted_jobs_file
+  local quoted_command_template quoted_timeout quoted_stale quoted_home quoted_path
+
+  launcher_path="$(loop_launcher_path_from_id "$job_id")"
+  state_dir="$(loop_state_dir)"
+  logs_dir="$(loop_logs_dir)"
+  jobs_file="$(loop_jobs_file)"
+  command_template="$(loop_command_template)"
+  timeout_seconds="$(loop_lock_timeout_seconds)"
+  stale_seconds="$(loop_lock_stale_seconds)"
+
+  quoted_runner="$(printf '%q' "$runner_script")"
+  quoted_job_id="$(printf '%q' "$job_id")"
+  quoted_state_dir="$(printf '%q' "$state_dir")"
+  quoted_logs_dir="$(printf '%q' "$logs_dir")"
+  quoted_jobs_file="$(printf '%q' "$jobs_file")"
+  quoted_command_template="$(printf '%q' "$command_template")"
+  quoted_timeout="$(printf '%q' "$timeout_seconds")"
+  quoted_stale="$(printf '%q' "$stale_seconds")"
+  quoted_home="$(printf '%q' "$HOME")"
+  quoted_path="$(printf '%q' "${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}")"
+
+  cat >"$launcher_path" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+export HOME=$quoted_home
+export PATH=$quoted_path
+export LOOP_STATE_DIR=$quoted_state_dir
+export LOOP_LOG_DIR=$quoted_logs_dir
+export LOOP_JOBS_FILE=$quoted_jobs_file
+export LOOP_COMMAND_TEMPLATE=$quoted_command_template
+export LOOP_LOCK_TIMEOUT_SECONDS=$quoted_timeout
+export LOOP_LOCK_STALE_SECONDS=$quoted_stale
+exec bash $quoted_runner --job-id $quoted_job_id --trigger scheduled --check-due
+EOF
+  chmod 755 "$launcher_path"
+}
+
+loop_windows_path() {
+  local path="$1"
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -aw "$path"
+  else
+    printf '%s\n' "$path"
+  fi
+}
+
+loop_write_windows_wrapper() {
+  local job_id="$1"
+  local launcher_path="$2"
+  local wrapper_path bash_path bash_windows launcher_windows
+
+  wrapper_path="$(loop_task_wrapper_path_from_id "$job_id")"
+  bash_path="$(command -v bash 2>/dev/null || true)"
+  if [[ -z "$bash_path" ]]; then
+    loop_error "bash is required for the task-scheduler backend"
+  fi
+
+  bash_windows="$(loop_windows_path "$bash_path")"
+  launcher_windows="$(loop_windows_path "$launcher_path")"
+
+  cat >"$wrapper_path" <<EOF
+@echo off
+"$bash_windows" "$launcher_windows"
+EOF
+  chmod 755 "$wrapper_path"
 }
 
 loop_launchd_domain() {
@@ -483,23 +726,18 @@ loop_unregister_launchd_job() {
 
 loop_write_launchd_plist() {
   local job_id="$1"
-  local workspace="$2"
-  local interval_seconds="$3"
-  local runner_script="$4"
-
-  local label plist_path log_path err_path state_dir logs_dir path_env home_dir codex_bin exec_args jobs_file
+  local launcher_path="$2"
+  local log_path="$3"
+  local err_path="$4"
+  local label plist_path state_dir logs_dir path_env home_dir dispatch_interval
 
   label="$(loop_label_from_id "$job_id")"
   plist_path="$(loop_plist_path_from_id "$job_id")"
-  log_path="$(loop_log_path_from_id "$job_id")"
-  err_path="$(loop_error_log_path_from_id "$job_id")"
   state_dir="$(loop_state_dir)"
   logs_dir="$(loop_logs_dir)"
   path_env="${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}"
   home_dir="$HOME"
-  codex_bin="${LOOP_CODEX_BIN:-codex}"
-  exec_args="${LOOP_CODEX_EXEC_ARGS:---full-auto}"
-  jobs_file="$(loop_jobs_file)"
+  dispatch_interval="$(loop_dispatch_interval_seconds)"
 
   cat >"$plist_path" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -511,16 +749,12 @@ loop_write_launchd_plist() {
     <key>ProgramArguments</key>
     <array>
       <string>/bin/bash</string>
-      <string>$(loop_xml_escape "$runner_script")</string>
-      <string>--job-id</string>
-      <string>$(loop_xml_escape "$job_id")</string>
-      <string>--trigger</string>
-      <string>scheduled</string>
+      <string>$(loop_xml_escape "$launcher_path")</string>
     </array>
     <key>WorkingDirectory</key>
-    <string>$(loop_xml_escape "$workspace")</string>
+    <string>$(loop_xml_escape "$state_dir")</string>
     <key>StartInterval</key>
-    <integer>${interval_seconds}</integer>
+    <integer>${dispatch_interval}</integer>
     <key>RunAtLoad</key>
     <false/>
     <key>StandardOutPath</key>
@@ -538,13 +772,75 @@ loop_write_launchd_plist() {
       <key>LOOP_LOG_DIR</key>
       <string>$(loop_xml_escape "$logs_dir")</string>
       <key>LOOP_JOBS_FILE</key>
-      <string>$(loop_xml_escape "$jobs_file")</string>
-      <key>LOOP_CODEX_BIN</key>
-      <string>$(loop_xml_escape "$codex_bin")</string>
-      <key>LOOP_CODEX_EXEC_ARGS</key>
-      <string>$(loop_xml_escape "$exec_args")</string>
+      <string>$(loop_xml_escape "$(loop_jobs_file)")</string>
+      <key>LOOP_COMMAND_TEMPLATE</key>
+      <string>$(loop_xml_escape "$(loop_command_template)")</string>
     </dict>
   </dict>
 </plist>
 EOF
+}
+
+loop_read_crontab() {
+  if ! command -v crontab >/dev/null 2>&1; then
+    loop_error "crontab is required for the cron backend"
+  fi
+  crontab -l 2>/dev/null || true
+}
+
+loop_write_crontab() {
+  local content="$1"
+  if ! command -v crontab >/dev/null 2>&1; then
+    loop_error "crontab is required for the cron backend"
+  fi
+  printf '%s\n' "$content" | crontab -
+}
+
+loop_register_cron_job() {
+  local job_id="$1"
+  local launcher_path="$2"
+  local tag line existing
+
+  tag="$(loop_cron_tag_from_id "$job_id")"
+  line="* * * * * /bin/bash $(printf '%q' "$launcher_path") >/dev/null 2>&1 ${tag}"
+  existing="$(loop_read_crontab | grep -Fv "$tag" || true)"
+
+  if [[ -n "$existing" ]]; then
+    loop_write_crontab "${existing}"$'\n'"${line}"
+  else
+    loop_write_crontab "$line"
+  fi
+}
+
+loop_unregister_cron_job() {
+  local job_id="$1"
+  local tag existing
+
+  tag="$(loop_cron_tag_from_id "$job_id")"
+  existing="$(loop_read_crontab | grep -Fv "$tag" || true)"
+  loop_write_crontab "$existing"
+}
+
+loop_register_task_scheduler_job() {
+  local job_id="$1"
+  local wrapper_path="$2"
+  local task_name wrapper_windows
+
+  if ! command -v schtasks >/dev/null 2>&1; then
+    loop_error "schtasks is required for the task-scheduler backend"
+  fi
+
+  task_name="$(loop_task_name_from_id "$job_id")"
+  wrapper_windows="$(loop_windows_path "$wrapper_path")"
+  schtasks /Create /F /SC MINUTE /MO 1 /TN "$task_name" /TR "\"$wrapper_windows\"" >/dev/null
+}
+
+loop_unregister_task_scheduler_job() {
+  local task_name="$1"
+
+  if ! command -v schtasks >/dev/null 2>&1; then
+    loop_error "schtasks is required for the task-scheduler backend"
+  fi
+
+  schtasks /Delete /F /TN "$task_name" >/dev/null
 }
