@@ -16,7 +16,7 @@ This folder is the source for the `autopilot` skill.
   - `/Users/karlchow/Desktop/code/trends/scripts/autopilot-reset.sh`
 - Keep Codex autopilot repo-local and explicit: `.codex/config.toml` enables hooks, `.codex/hooks.json` wires repo-local shims, and `.codex/skills/autopilot_reset/SKILL.md` stays tiny.
 - Keep hook shims thin. The real behavior lives in the shared repo scripts under `scripts/hooks/` and `scripts/autopilot-reset.sh`.
-- Treat same-session continuation as a separate problem. For that, prefer `ralph-loop` instead of expanding autopilot.
+- Treat same-session continuation as a separate problem. Do not point users to an archived shared same-session loop skill or expand autopilot into a generic shared same-session loop.
 - Treat Claude Code built-in loop surfaces as better defaults for Claude. Do not present the legacy `.claude` autopilot bundle as the preferred workflow unless the user explicitly asks for Claude compatibility work.
 - Do not center the skill on managed `~/.codex/hooks.json` or a user-level installer unless the user explicitly asks for that path.
 - Treat `templates/` and `scripts/install_repo_local_autopilot.py` in this bundle as legacy Claude `.claude` support only.

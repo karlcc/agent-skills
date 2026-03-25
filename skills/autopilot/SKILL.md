@@ -9,7 +9,7 @@ Use this skill for the simple repo-local Codex autopilot design.
 
 ## Choose the right tool
 
-- If the user wants Codex to keep working on the current bounded task in the same session, use `$ralph-loop` instead.
+- If the user wants Codex to keep working on the current bounded task in the same session, do not route them to an archived shared same-session loop skill.
 - Use `$autopilot` when the user wants repo-local Codex hook wiring, unattended continuation, or the first-release `.codex` bundle refreshed.
 - Treat Claude Code built-in loop features as the better default for Claude. Only use the bundled `.claude` files for explicit legacy compatibility work.
 
@@ -46,7 +46,7 @@ codex_hooks = true
 
 ## Procedure
 
-1. Determine whether the user wants same-session continuation or repo-local autopilot wiring. If it is same-session continuation, switch to `$ralph-loop`.
+1. Determine whether the user wants same-session continuation or repo-local autopilot wiring. If it is same-session continuation only, keep working directly in the current session instead of routing to an archived shared skill.
 2. For repo-local autopilot, read the five `.codex` files from the `trends` baseline before editing anything else.
 3. Ensure the target repo already has the shared scripts under `scripts/hooks/` plus `scripts/autopilot-reset.sh`, or add the equivalent first.
 4. Mirror the `trends` file shape and keep any edits as small as possible.

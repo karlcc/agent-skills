@@ -1,6 +1,6 @@
 ---
 name: loop
-description: Schedule recurring Codex prompts as fresh background runs using user-scope scheduler backends. Use when the user wants cron-like repeated checks, reminders, status polling, or periodic command execution outside the active TUI session. Do not use this for same-session continuation; route that to ralph-loop.
+description: Schedule recurring Codex prompts as fresh background runs using user-scope scheduler backends. Use when the user wants cron-like repeated checks, reminders, status polling, or periodic command execution outside the active TUI session. Do not use this for same-session continuation.
 allowed-tools:
   - Bash
 ---
@@ -11,7 +11,7 @@ Use this skill for a separate scheduler lane. Each execution starts a fresh
 `codex exec` run from an OS scheduler. It does not re-enter the currently open
 interactive Codex TUI session.
 
-It is not a replacement for `$ralph-loop`, and it should never install or
+It is not a same-session continuation tool, and it should never install or
 modify Stop hooks.
 
 If the user asks for "Claude Code `/loop` but in the same live session", be
@@ -34,7 +34,7 @@ Do not use this skill when the user wants:
 - "keep working until done"
 - a completion promise loop
 
-Those cases belong to `$ralph-loop`.
+Those cases are not handled by this skill.
 
 ## User-scope install
 
@@ -205,11 +205,10 @@ These are especially useful for dry-run tests in a temp directory.
 - Scheduled jobs create fresh Codex executions. They do not resume the same live
   interactive turn.
 - `$loop` is a scheduler surface, not a Stop-hook continuation surface.
-- `ralph-loop` is same-session and Stop-hook based; `loop` is fresh-session and
-  scheduler based.
-- If the user asks for same-session looping, tell them to use `$ralph-loop` for
-  bounded continuation. Do not claim `$loop` is equivalent to Claude's
-  session-scoped scheduled tasks.
+- same-session continuation is currently not published here as a shared skill;
+  do not promise it through `$loop`
+- if the user asks for same-session looping, be explicit that `$loop` is not
+  equivalent to Claude's session-scoped scheduled tasks
 - cmux autopilot also uses Stop hooks, so `loop` must stay separate from that
   channel.
 - Registry writes are lock-protected so concurrent add/run/remove flows do not
@@ -218,4 +217,4 @@ These are especially useful for dry-run tests in a temp directory.
 - Parser coverage is deterministic only for the supported shorthand and command
   patterns above. If a request is highly conversational, parse it with
   `parse-request.py` first and inspect the JSON before scheduling anything live.
-- Keep `$loop` and `$ralph-loop` conceptually separate in docs and behavior.
+- Keep `$loop` separate from repo-local autopilot and other Stop-hook designs.
