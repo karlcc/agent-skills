@@ -56,19 +56,27 @@ TESTS_PASSED=$((TESTS_PASSED + 1))
 
 cd "$WORKSPACE"
 bash "$START_SCRIPT" --workspace "$WORKSPACE" --max-iterations 2 --completion-promise DONE --prompt "Create smoke.txt with smoke"
+assert_eq "$(jq -r '.auto_continue' .codex/ralph-loop-state.json)" "true" "state should enable auto continue"
+assert_eq "$(jq -r '.continue_magic_word' .codex/ralph-loop-state.json)" "RALPH_AUTO_CONTINUE" "state should store the default continuation magic word"
+assert_eq "$(jq -r '.continue_signal' .codex/ralph-loop-state.json)" "<ralph-continue>RALPH_AUTO_CONTINUE</ralph-continue>" "state should store the default continuation signal"
 
 FIRST_OUTPUT="$(cd "$TMP_DIR" && printf '%s' "$(make_stop_payload "$WORKSPACE" "draft one")" | bash "$HOOK_SCRIPT")"
 assert_eq "$(jq -r '.decision' <<<"$FIRST_OUTPUT")" "block" "first stop should block even outside the workspace cwd"
+assert_eq "$(jq -r '.reason | contains("Do not ask whether")' <<<"$FIRST_OUTPUT")" "true" "block reason should force automatic continuation"
+assert_eq "$(jq -r '.reason | contains("<ralph-continue>RALPH_AUTO_CONTINUE</ralph-continue>")' <<<"$FIRST_OUTPUT")" "true" "block reason should include the default continuation signal"
 assert_eq "$(jq -r '.iteration' .codex/ralph-loop-state.json)" "1" "iteration should increment after first block"
 
 SECOND_OUTPUT="$(printf '%s' "$(make_stop_payload "$WORKSPACE" "<promise>DONE</promise>")" | bash "$HOOK_SCRIPT")"
 assert_eq "$(jq -r '.systemMessage | contains("completion signal detected")' <<<"$SECOND_OUTPUT")" "true" "completion should allow the turn to finish"
 assert_eq "$([[ -f .codex/ralph-loop-state.json ]] && echo yes || echo no)" "no" "state file should be removed after completion"
 
-bash "$START_SCRIPT" --workspace "$WORKSPACE" --max-iterations 1 --completion-promise DONE --prompt "Reach max iterations"
+bash "$START_SCRIPT" --workspace "$WORKSPACE" --max-iterations 1 --completion-promise DONE --magic-word TURBO_KEEP_GOING --prompt "Reach max iterations"
+assert_eq "$(jq -r '.continue_magic_word' .codex/ralph-loop-state.json)" "TURBO_KEEP_GOING" "state should store the custom continuation magic word"
+assert_eq "$(jq -r '.continue_signal' .codex/ralph-loop-state.json)" "<ralph-continue>TURBO_KEEP_GOING</ralph-continue>" "state should store the custom continuation signal"
 
 MAX_FIRST_OUTPUT="$(printf '%s' "$(make_stop_payload "$WORKSPACE" "draft")" | bash "$HOOK_SCRIPT")"
 assert_eq "$(jq -r '.decision' <<<"$MAX_FIRST_OUTPUT")" "block" "first pass of max-iteration test should block"
+assert_eq "$(jq -r '.reason | contains("<ralph-continue>TURBO_KEEP_GOING</ralph-continue>")' <<<"$MAX_FIRST_OUTPUT")" "true" "custom continuation signal should appear in the block reason"
 MAX_SECOND_OUTPUT="$(printf '%s' "$(make_stop_payload "$WORKSPACE" "still working")" | bash "$HOOK_SCRIPT")"
 assert_eq "$(jq -r '.systemMessage | contains("max iteration limit")' <<<"$MAX_SECOND_OUTPUT")" "true" "max iterations should allow the turn to finish"
 assert_eq "$([[ -f .codex/ralph-loop-state.json ]] && echo yes || echo no)" "no" "state file should be removed after max iteration exit"

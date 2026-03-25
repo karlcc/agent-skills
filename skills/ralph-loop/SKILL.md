@@ -1,6 +1,6 @@
 ---
 name: ralph-loop
-description: Keep Codex iterating on the same bounded task until a completion signal appears in the assistant output or a maximum iteration count is reached. Use when the user asks for a Ralph Loop, asks Codex to keep going until done, or wants to prevent premature stopping on a task that should stay in the current workspace.
+description: Keep Codex auto-continuing on the same bounded task until a completion signal appears in the assistant output or a maximum iteration count is reached. Use when the user asks for a Ralph Loop, asks Codex to keep going until done, or wants to prevent premature stopping on a task that should stay in the current workspace.
 allowed-tools:
   - Bash
 ---
@@ -15,12 +15,15 @@ Optional conventions in the user message:
 
 - `--max-iterations N`
 - `--completion-promise TEXT`
+- `--magic-word TEXT`
 
 Defaults:
 
 - max iterations: `50`
 - completion promise: `DONE`
+- continuation magic word: `RALPH_AUTO_CONTINUE`
 - completion signal written in the assistant message: `<promise>DONE</promise>`
+- continuation signal for non-final turns: `<ralph-continue>RALPH_AUTO_CONTINUE</ralph-continue>`
 
 ## What this skill does
 
@@ -28,7 +31,9 @@ This skill writes a workspace-local state file at `.codex/ralph-loop-state.json`
 A user-scope Stop-hook dispatcher in `~/.codex/hooks.json` reads that state file
 after each assistant response. If the completion signal is missing and the max
 iteration limit has not been reached, the Stop hook blocks the turn and feeds a
-continuation prompt back to Codex.
+continuation prompt back to Codex. The continuation prompt keeps the loop in
+automatic mode, tells Codex not to ask whether it should continue, and carries
+an explicit continuation signal keyed off the configured magic word.
 
 This is a simple utility loop. It is not a replacement for higher-level
 orchestration systems such as cmux Autopilot.
@@ -65,12 +70,15 @@ letting the cmux dispatcher fall back to the home Ralph hook.
    - the task prompt
    - `max_iterations`
    - `completion_promise`
+   - `magic_word`
 3. Resolve the active task workspace path first.
 4. Run `scripts/start-loop.sh` from this skill directory and pass the workspace
    explicitly with `--workspace`.
 4. Confirm the state file exists at `.codex/ralph-loop-state.json`.
 5. Work the task normally in the current workspace.
-6. When the task is actually complete, include the exact completion signal in
+6. While another turn is still required, keep auto-continuing and include the
+   continuation signal in non-final assistant messages.
+7. When the task is actually complete, include the exact completion signal in
    the final assistant message.
 
 ## Required command
@@ -82,6 +90,7 @@ bash scripts/start-loop.sh \
   --workspace "/absolute/path/to/current/workspace" \
   --max-iterations 50 \
   --completion-promise DONE \
+  --magic-word RALPH_AUTO_CONTINUE \
   --prompt "TASK GOES HERE"
 ```
 
@@ -94,6 +103,14 @@ explicitly.
 - Stay on the same task across continuation prompts.
 - Continue from the current workspace state; do not restart from scratch.
 - Prefer concrete progress each iteration: inspect, edit, verify, repeat.
+- Do not ask the user whether to keep going while the loop is active.
+- If another turn is still required, include the exact continuation signal:
+
+```text
+<ralph-continue>RALPH_AUTO_CONTINUE</ralph-continue>
+```
+
+- If the user chose a different magic word, substitute it into the tag.
 - Use the loop for bounded tasks. If the user is really asking for broad
   orchestration, background supervision, or multi-agent management, stop and use
   a different workflow instead.

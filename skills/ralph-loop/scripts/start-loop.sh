@@ -3,12 +3,13 @@ set -euo pipefail
 
 DEFAULT_MAX_ITERATIONS=50
 DEFAULT_COMPLETION_PROMISE="DONE"
+DEFAULT_MAGIC_WORD="RALPH_AUTO_CONTINUE"
 
 usage() {
   cat <<'EOF'
 Usage:
-  start-loop.sh --workspace DIR --prompt "task" [--max-iterations N] [--completion-promise TEXT] [--force]
-  start-loop.sh --workspace DIR [--max-iterations N] [--completion-promise TEXT] -- task words here
+  start-loop.sh --workspace DIR --prompt "task" [--max-iterations N] [--completion-promise TEXT] [--magic-word TEXT] [--force]
+  start-loop.sh --workspace DIR [--max-iterations N] [--completion-promise TEXT] [--magic-word TEXT] -- task words here
   start-loop.sh --workspace DIR --show
   start-loop.sh --workspace DIR --cancel
 
@@ -16,6 +17,7 @@ Notes:
   - The state file is written to WORKSPACE/.codex/ralph-loop-state.json.
   - --max-iterations 0 means no hard cap.
   - The completion signal defaults to <promise>DONE</promise>.
+  - The continuation signal defaults to <ralph-continue>RALPH_AUTO_CONTINUE</ralph-continue>.
 EOF
 }
 
@@ -36,8 +38,17 @@ assert_integer() {
   fi
 }
 
+assert_magic_word() {
+  local value="$1"
+  if ! [[ "$value" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    echo "Expected --magic-word to match [A-Za-z0-9._-]+, got: $value" >&2
+    exit 1
+  fi
+}
+
 MAX_ITERATIONS="$DEFAULT_MAX_ITERATIONS"
 COMPLETION_PROMISE="$DEFAULT_COMPLETION_PROMISE"
+MAGIC_WORD="$DEFAULT_MAGIC_WORD"
 PROMPT=""
 WORKSPACE=""
 FORCE=false
@@ -65,6 +76,11 @@ while (($# > 0)); do
       shift
       require_value "--completion-promise" "${1:-}"
       COMPLETION_PROMISE="$1"
+      ;;
+    --magic-word)
+      shift
+      require_value "--magic-word" "${1:-}"
+      MAGIC_WORD="$1"
       ;;
     --force)
       FORCE=true
@@ -126,6 +142,7 @@ if $CANCEL; then
 fi
 
 assert_integer "$MAX_ITERATIONS"
+assert_magic_word "$MAGIC_WORD"
 
 if [[ -z "$PROMPT" ]]; then
   usage >&2
@@ -143,6 +160,7 @@ COMPLETION_SIGNAL="$COMPLETION_PROMISE"
 if [[ "$COMPLETION_SIGNAL" != *"<"* ]]; then
   COMPLETION_SIGNAL="<promise>${COMPLETION_PROMISE}</promise>"
 fi
+CONTINUE_SIGNAL="<ralph-continue>${MAGIC_WORD}</ralph-continue>"
 
 TMP_FILE="${STATE_FILE}.tmp"
 CREATED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
@@ -151,15 +169,20 @@ jq -n \
   --arg prompt "$PROMPT" \
   --arg completion_promise "$COMPLETION_PROMISE" \
   --arg completion_signal "$COMPLETION_SIGNAL" \
+  --arg continue_magic_word "$MAGIC_WORD" \
+  --arg continue_signal "$CONTINUE_SIGNAL" \
   --arg created_at "$CREATED_AT" \
   --argjson max_iterations "$MAX_ITERATIONS" \
   '{
     active: true,
+    auto_continue: true,
     prompt: $prompt,
     iteration: 0,
     max_iterations: $max_iterations,
     completion_promise: $completion_promise,
     completion_signal: $completion_signal,
+    continue_magic_word: $continue_magic_word,
+    continue_signal: $continue_signal,
     created_at: $created_at,
     updated_at: $created_at,
     state_version: 1
@@ -169,6 +192,8 @@ mv "$TMP_FILE" "$STATE_FILE"
 
 echo "Initialized Ralph Loop state at $STATE_FILE"
 echo "Completion signal: $COMPLETION_SIGNAL"
+echo "Continuation magic word: $MAGIC_WORD"
+echo "Continuation signal: $CONTINUE_SIGNAL"
 if [[ "$MAX_ITERATIONS" == "0" ]]; then
   echo "Max iterations: unlimited"
 else
