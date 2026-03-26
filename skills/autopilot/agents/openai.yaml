@@ -1,4 +1,7 @@
 interface:
   display_name: "Autopilot"
-  short_description: "Managed Codex home-hook autopilot"
-  default_prompt: "Use $autopilot to install or refresh the generic managed Codex home-hook autopilot flow, with repo-local `.codex/hooks/*.sh` overrides only when this workspace needs custom routing."
+  short_description: "Install managed Codex home-hook autopilot"
+  default_prompt: "Use $autopilot to run the bundled Codex home-hook installer from this skill, verify ~/.codex/hooks.json plus ~/.codex/autopilot, and only add repo-local .codex/hooks/*.sh overrides when this workspace needs custom routing."
+
+policy:
+  allow_implicit_invocation: false

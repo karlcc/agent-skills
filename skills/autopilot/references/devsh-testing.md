@@ -1,76 +1,52 @@
 # devsh Remote Validation
 
-Use this checklist to validate the repo-local autopilot bundle inside a remote devsh sandbox.
+Use this checklist to validate the bundled Codex home-hook autopilot skill inside a remote devsh sandbox.
 
-## 1. Confirm a Claude model
+## 1. Install the skill in the sandbox
 
-```bash
-devsh models
-```
-
-Pick an available Claude model such as `claude/sonnet-4.5`.
-
-## 2. Make the bundle available in the sandbox
-
-The installer is self-contained, but the sandbox still needs a copy of this skill directory before it can run the installer.
-
-One workable pattern is to copy `skills/autopilot/` into the sandbox at a path such as `/root/agent-skills/skills/autopilot`, then run the installer from there.
-
-## 3. Create a test task
-
-Use one of the declared test repos:
-
-- `karlorz/testing-repo-1`
-- `karlorz/testing-repo-2`
-- `karlorz/testing-repo-3`
-
-Example:
+From the remote workspace root:
 
 ```bash
-devsh task create \
-  --repo karlorz/testing-repo-1 \
-  --agent claude/sonnet-4.5 \
-  --json \
-  "Copy the bundled autopilot skill into the sandbox if needed, run its repo-local installer against this repository, verify the installed files, and report the resulting settings.json hook entries."
+npx skills add https://github.com/karlorz/agent-skills/tree/main/skills/autopilot \
+  --skill autopilot \
+  -a codex \
+  -y
 ```
 
-## 4. Inspect task state
+That should create `.agents/skills/autopilot/`.
+
+## 2. Run the bundled installer
 
 ```bash
-devsh task status <task-id> --json
-devsh task runs <task-id> --json
+bash .agents/skills/autopilot/scripts/install-codex-home-hooks.sh
 ```
 
-If needed, attach to the run:
+## 3. Inspect the installed managed files
+
+Verify these paths exist in the sandbox:
+
+- `~/.codex/hooks.json`
+- `~/.codex/hooks/`
+- `~/.codex/autopilot/`
+- `~/.codex/skills/autopilot_reset/SKILL.md`
+
+## 4. Run the bundled tests
 
 ```bash
-devsh task attach <task-run-id>
+bash .agents/skills/autopilot/scripts/test-codex-home-hooks-install.sh
+bash .agents/skills/autopilot/scripts/test-codex-home-hooks-smoke.sh
 ```
 
-## 5. Verify repo-local behavior in the sandbox
+## 5. Verify runtime behavior
 
-Confirm the remote repo contains:
+Confirm:
 
-- `.claude/hooks/autopilot-keep-running.sh`
-- `.claude/hooks/session-start.sh`
-- `.claude/commands/autopilot_reset.md`
-- `.claude/settings.json`
-
-Then verify:
-
-- the copied skill bundle can run its installer directly from that copied path
-- `session-start.sh` writes `/tmp/claude-current-session-id`
-- `autopilot-keep-running.sh` creates or updates `/tmp/claude-autopilot-turns-<session-id>`
-- `autopilot-keep-running.sh` also manages `/tmp/claude-autopilot-state-<session-id>` and `/tmp/claude-autopilot-idle-<session-id>` while idle detection is active
-- `/autopilot_reset stop` semantics create `/tmp/claude-autopilot-stop-<session-id>`
-- `/autopilot_reset` clears turn, stop, blocked, completed, state, and idle files for the target session
-- the installer reports a clear dependency error if `jq` or both hash commands are unavailable
-- the install works without relying on `~/.claude`
+- `managed-session-start.sh` records `/tmp/codex-current-session-id`
+- `managed-session-start.sh` records `/tmp/codex-current-workspace-root`
+- `cmux-stop-dispatch.sh` falls back to the managed home autopilot hook when no repo-local override exists
+- the stop hook creates `/tmp/codex-autopilot-turns-<session-id>`
+- `AUTOPILOT_PROVIDER=codex bash ~/.codex/autopilot/autopilot-reset.sh status-all` reports the recorded session state
 
 ## 6. Clean up
 
-When finished, stop the remote task if it is still running:
-
-```bash
-devsh task stop <task-id>
-```
+If you only needed an isolated smoke test, remove the temporary sandbox workspace after validation.
