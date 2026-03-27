@@ -1,6 +1,6 @@
 ---
 name: obsidian-gh-knowledge
-description: Bootstrap and operate an Obsidian vault with official Obsidian CLI first (local), with local filesystem/git fallback, and GitHub API fallback when local access is unavailable. Use for first-run workspace init from a confirmed vault repo URL, wiring `~/.config/obsidian-gh-knowledge/config.json`, auditing vault health and readability (TL;DR coverage, structure cleanup backlog, oversized project overviews, graph health), and for listing, reading, searching, creating/updating, and moving notes in Obsidian vaults.
+description: Bootstrap and operate an Obsidian vault with official Obsidian CLI first, then local filesystem/git fallback, then GitHub API fallback when local access is unavailable. Use when Codex needs first-run workspace init from a confirmed vault repo URL, project-scoped note reads and writes, vault health and readability audits, or structure cleanup in this vault. Verify current Obsidian CLI and Help syntax with Context7 instead of guessing, and use DeepWiki only for related public repo exploration.
 ---
 
 # Obsidian GH Knowledge (CLI-first)
@@ -79,6 +79,30 @@ This ordering is for compatibility across desktop, server, and sandbox environme
 5. If CLI checks fail, fall back to local filesystem/git mode.
 6. If local mode is unavailable, use GitHub mode.
 
+## Script path helper
+
+Use one helper to find bundled scripts across repo-local and user-skill layouts:
+
+```bash
+resolve_obsidian_gh_script() {
+  local name="$1"
+  local path
+  for path in \
+    "skills/obsidian-gh-knowledge/scripts/$name" \
+    "agent-skills/skills/obsidian-gh-knowledge/scripts/$name" \
+    "scripts/$name" \
+    "$HOME/.agents/skills/obsidian-gh-knowledge/scripts/$name"
+  do
+    if [ -f "$path" ]; then
+      printf '%s\n' "$path"
+      return 0
+    fi
+  done
+  echo "Could not find obsidian-gh-knowledge script: $name" >&2
+  return 1
+}
+```
+
 ## First-time workspace bootstrap
 
 Use this workflow when a new workspace does not yet have the vault checked out locally.
@@ -91,23 +115,11 @@ Rules:
 - `~` is user-specific. If the current user is `root`, the default destination becomes `/root/Documents/<repo-name>`.
 - Use `--vault-dir` only when the user explicitly wants a different destination.
 
-Resolve the bootstrap script path in this order:
-
-```bash
-if [ -f "skills/obsidian-gh-knowledge/scripts/init_local_vault.py" ]; then
-  INIT_SCRIPT_PATH="skills/obsidian-gh-knowledge/scripts/init_local_vault.py"
-elif [ -f "agent-skills/skills/obsidian-gh-knowledge/scripts/init_local_vault.py" ]; then
-  INIT_SCRIPT_PATH="agent-skills/skills/obsidian-gh-knowledge/scripts/init_local_vault.py"
-elif [ -f "scripts/init_local_vault.py" ]; then
-  INIT_SCRIPT_PATH="scripts/init_local_vault.py"
-else
-  INIT_SCRIPT_PATH="$HOME/.agents/skills/obsidian-gh-knowledge/scripts/init_local_vault.py"
-fi
-```
-
 Run it after confirmation:
 
 ```bash
+INIT_SCRIPT_PATH="$(resolve_obsidian_gh_script init_local_vault.py)"
+
 python3 "$INIT_SCRIPT_PATH" \
   --repo-url "https://github.com/karlorz/obsidian_vault" \
   --repo-key personal
@@ -153,7 +165,7 @@ After bootstrap, re-run mode selection and prefer local CLI or local git fallbac
    - Example: cmux project -> `5️⃣-Projects/GitHub/cmux/`
    - Example: trends project -> `5️⃣-Projects/GitHub/trends/`
 
-3. **Always read `<project>/_Overview.md` first** to confirm you’re in the right place before any other reads or writes.
+3. **Always read `<project>/_Overview.md` first** to confirm you're in the right place before any other reads or writes.
 
 4. **Never cross project boundaries** without explicit user request:
    - If working on `cmux`, do not read/write to `trends/` folder
@@ -168,7 +180,7 @@ After bootstrap, re-run mode selection and prefer local CLI or local git fallbac
 
    # 2. Check package.json name field
    if [ -z "$PROJECT" ] && [ -f "package.json" ]; then
-     PROJECT=$(jq -r ‘.name // empty’ package.json 2>/dev/null | grep -oE "cmux|trends" | head -1)
+     PROJECT=$(jq -r '.name // empty' package.json 2>/dev/null | grep -oE "cmux|trends" | head -1)
    fi
 
    # 3. Check git remote
@@ -177,7 +189,7 @@ After bootstrap, re-run mode selection and prefer local CLI or local git fallbac
    fi
    ```
 
-6. **When listing project folders**, always show what’s available:
+6. **When listing project folders**, always show what's available:
    ```bash
    ls "$VAULT_DIR/5️⃣-Projects/GitHub/"
    # Output: cmux  data-labeling  openclaw  trends
@@ -219,6 +231,7 @@ Do not block execution waiting for CLI in headless environments.
 
 - Obsidian desktop `1.12+`.
 - CLI enabled in app settings: `Settings -> General -> Advanced -> Command line interface`.
+- Obsidian app must be able to launch; the first CLI command may start it if it is not already running.
 - On macOS, ensure PATH contains `/Applications/Obsidian.app/Contents/MacOS`.
 - If CLI commands fail and stderr shows `Unable to find helper app` or `Command line interface is not enabled`, re-enable the CLI toggle in settings and restart the terminal. If commands succeed and only emit the helper warning, treat it as noise and continue.
 
@@ -249,8 +262,8 @@ obsidian search query="MOC" path="5️⃣-Projects/" format=json
 obsidian read path="5️⃣-Projects/GitHub/cmux/_Overview.md"
 
 # Create/update content
-obsidian create name="new-note" path="2️⃣-Drafts" content="# Title\n\n## TL;DR\n"
-obsidian write path="2️⃣-Drafts/new-note.md" content="# Title\n\n## TL;DR\n- [ ] Follow up"
+obsidian create path="2️⃣-Drafts/new-note.md" content="# Title\n\n## TL;DR\n"
+obsidian create path="2️⃣-Drafts/new-note.md" content="# Title\n\n## TL;DR\n- [ ] Follow up" overwrite
 obsidian append path="2️⃣-Drafts/new-note.md" content="\n- [ ] Follow up"
 
 # Move/rename and delete
@@ -272,20 +285,24 @@ obsidian daily:append content="- [ ] Review inbox"
 For common macOS workflows, prefer the repo-specific helper over hand-building command sequences:
 
 ```bash
-python3 agent-skills/skills/obsidian-gh-knowledge/scripts/local_obsidian_knowledge.py doctor
-python3 agent-skills/skills/obsidian-gh-knowledge/scripts/local_obsidian_knowledge.py dashboard
-python3 agent-skills/skills/obsidian-gh-knowledge/scripts/local_obsidian_knowledge.py review
-python3 agent-skills/skills/obsidian-gh-knowledge/scripts/local_obsidian_knowledge.py simplify-review
-python3 agent-skills/skills/obsidian-gh-knowledge/scripts/local_obsidian_knowledge.py audit
-python3 agent-skills/skills/obsidian-gh-knowledge/scripts/local_obsidian_knowledge.py fix-tldr --dry-run
-python3 agent-skills/skills/obsidian-gh-knowledge/scripts/local_obsidian_knowledge.py structure-report --dry-run
-python3 agent-skills/skills/obsidian-gh-knowledge/scripts/local_obsidian_knowledge.py structure-fix --dry-run
-python3 agent-skills/skills/obsidian-gh-knowledge/scripts/local_obsidian_knowledge.py archive-fix --dry-run
-python3 agent-skills/skills/obsidian-gh-knowledge/scripts/local_obsidian_knowledge.py capture "Quick note"
-python3 agent-skills/skills/obsidian-gh-knowledge/scripts/local_obsidian_knowledge.py project-note cmux "Feature review"
-python3 agent-skills/skills/obsidian-gh-knowledge/scripts/local_obsidian_knowledge.py organize "0️⃣-Inbox/feature-review.md" cmux
-python3 agent-skills/skills/obsidian-gh-knowledge/scripts/local_obsidian_knowledge.py sync --message "Update vault notes"
+LOCAL_WRAPPER="$(resolve_obsidian_gh_script local_obsidian_knowledge.py)"
+
+python3 "$LOCAL_WRAPPER" doctor
+python3 "$LOCAL_WRAPPER" dashboard
+python3 "$LOCAL_WRAPPER" review
+python3 "$LOCAL_WRAPPER" simplify-review
+python3 "$LOCAL_WRAPPER" audit
+python3 "$LOCAL_WRAPPER" fix-tldr --dry-run
+python3 "$LOCAL_WRAPPER" structure-report --dry-run
+python3 "$LOCAL_WRAPPER" structure-fix --dry-run
+python3 "$LOCAL_WRAPPER" archive-fix --dry-run
+python3 "$LOCAL_WRAPPER" capture "Quick note"
+python3 "$LOCAL_WRAPPER" project-note cmux "Feature review"
+python3 "$LOCAL_WRAPPER" organize "0️⃣-Inbox/feature-review.md" cmux
+python3 "$LOCAL_WRAPPER" sync --message "Update vault notes"
 ```
+
+`--vault-dir` is a global option. If you need it, place it before the subcommand, for example `python3 "$LOCAL_WRAPPER" --vault-dir "$VAULT_DIR" doctor`.
 
 Wrapper responsibilities:
 
@@ -311,7 +328,9 @@ Wrapper responsibilities:
 
 Recommended (one command):
 ```bash
-python3 "$VAULT_DIR/agent-skills/skills/obsidian-gh-knowledge/scripts/local_vault_git_sync.py" \
+LOCAL_SYNC_SCRIPT="$(resolve_obsidian_gh_script local_vault_git_sync.py)"
+
+python3 "$LOCAL_SYNC_SCRIPT" \
   --vault-dir "$VAULT_DIR" \
   --message "Update vault notes"
 ```
@@ -371,21 +390,9 @@ Never guess repo names.
 
 ### Commands
 
-Resolve script path in this order (sandbox-safe):
-
 ```bash
-if [ -f "skills/obsidian-gh-knowledge/scripts/github_knowledge_skill.py" ]; then
-  SCRIPT_PATH="skills/obsidian-gh-knowledge/scripts/github_knowledge_skill.py"
-elif [ -f "agent-skills/skills/obsidian-gh-knowledge/scripts/github_knowledge_skill.py" ]; then
-  SCRIPT_PATH="agent-skills/skills/obsidian-gh-knowledge/scripts/github_knowledge_skill.py"
-elif [ -f "scripts/github_knowledge_skill.py" ]; then
-  SCRIPT_PATH="scripts/github_knowledge_skill.py"
-else
-  SCRIPT_PATH="$HOME/.agents/skills/obsidian-gh-knowledge/scripts/github_knowledge_skill.py"
-fi
-```
+SCRIPT_PATH="$(resolve_obsidian_gh_script github_knowledge_skill.py)"
 
-```bash
 python3 "$SCRIPT_PATH" \
   --repo <owner/repo> <command> [args]
 ```
