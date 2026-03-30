@@ -63,6 +63,9 @@ TLDR_SKIP_FILE_NAMES = {
 STRUCTURE_REPORT_DEFAULT = "1️⃣-Index/vault-structure-cleanup-report.md"
 SIMPLIFY_REVIEW_DEFAULT = "1️⃣-Index/vault-simplify-dedupe-review.md"
 STRUCTURE_ROOT_HUB = Path("1️⃣-Index/vault-operations-index.md")
+SNAPSHOT_REPORT_CONTRACT = Path("1️⃣-Index/vault-snapshot-report-contract.md")
+VAULT_EXCEPTION_DASHBOARD = Path("1️⃣-Index/vault-exception-dashboard.md")
+WEEKLY_REVIEW_RUNBOOK = Path("1️⃣-Index/weekly-vault-review-runbook.md")
 STRUCTURE_PROMPT_HUB = Path("1️⃣-Index/prompt-library.md")
 STRUCTURE_CMUX_HUB = Path("1️⃣-Index/cmux-local-workflows-index.md")
 OVERVIEW_MAX_LINES = 200
@@ -888,51 +891,63 @@ def _structure_report_markdown(data: dict) -> str:
         f"- Active-scope note graph analyzed **{scope['notes_analyzed']}** markdown notes.",
         f"- **{counts['isolated']}** notes are fully isolated, **{counts['orphans']}** have no inbound links, and **{counts['deadends']}** have no outbound links.",
         f"- Report generated on **{data['generated_at']}** and excludes archive, attachment, hidden, and generated-report paths.",
+        f"- Treat this as a snapshot report under {_structure_note_link(SNAPSHOT_REPORT_CONTRACT, display='Vault Snapshot Report Contract')}. Use {_structure_note_link(VAULT_EXCEPTION_DASHBOARD, display='Vault Exception Dashboard')} or {_structure_note_link(WEEKLY_REVIEW_RUNBOOK, display='Weekly Vault Review Runbook')} for the live review sequence.",
         "",
         "## Scope",
+        f"- Generated on **{data['generated_at']}**.",
+        f"- Active-scope scan of **{scope['notes_analyzed']}** markdown notes.",
         "- Excludes `archive`, `_archive`, attachments/assets, hidden/system folders, and the generated cleanup report itself.",
         "- Uses local Markdown link parsing for wikilinks and internal markdown paths, not the unstable live Obsidian orphan/dead-end list commands.",
         "",
+        "## Snapshot Summary",
+        "",
+        f"- Fully isolated notes in active scope: **{counts['isolated']}**",
+        f"- Notes with no inbound links in active scope: **{counts['orphans']}**",
+        f"- Notes with no outbound links in active scope: **{counts['deadends']}**",
+        "",
         "## Hotspots",
-        "",
-        "### Orphan Hotspots",
-        "| Folder | Count |",
-        "| --- | ---: |",
     ]
-    if orphan_hotspots:
-        for item in orphan_hotspots:
-            lines.append(f"| `{item['folder']}` | {item['count']} |")
-    else:
-        lines.append("| none | 0 |")
-
-    lines.extend([
-        "",
-        "### Dead-End Hotspots",
-        "| Folder | Count |",
-        "| --- | ---: |",
-    ])
-    if deadend_hotspots:
-        for item in deadend_hotspots:
-            lines.append(f"| `{item['folder']}` | {item['count']} |")
-    else:
-        lines.append("| none | 0 |")
-
-    def _append_rows(title: str, rows: list[dict[str, str]]) -> None:
+    if not (orphan_hotspots or deadend_hotspots or isolated_sample or orphan_sample or deadend_sample):
         lines.extend([
             "",
-            f"## {title}",
-            "| Note | Folder | Suggested Overview |",
-            "| --- | --- | --- |",
+            "- No current orphan, dead-end, or isolated hotspots were found in the active scope.",
         ])
-        if rows:
+    else:
+        if orphan_hotspots:
+            lines.extend([
+                "",
+                "### Orphan Hotspots",
+                "| Folder | Count |",
+                "| --- | ---: |",
+            ])
+            for item in orphan_hotspots:
+                lines.append(f"| `{item['folder']}` | {item['count']} |")
+
+        if deadend_hotspots:
+            lines.extend([
+                "",
+                "### Dead-End Hotspots",
+                "| Folder | Count |",
+                "| --- | ---: |",
+            ])
+            for item in deadend_hotspots:
+                lines.append(f"| `{item['folder']}` | {item['count']} |")
+
+        def _append_rows(title: str, rows: list[dict[str, str]]) -> None:
+            if not rows:
+                return
+            lines.extend([
+                "",
+                f"### {title}",
+                "| Note | Folder | Suggested Overview |",
+                "| --- | --- | --- |",
+            ])
             for row in rows:
                 lines.append(f"| {row['note_link']} | `{row['folder']}` | {row['overview_link']} |")
-        else:
-            lines.append("| none | — | — |")
 
-    _append_rows("Priority Isolated Notes", isolated_sample)
-    _append_rows("Orphan Note Samples", orphan_sample)
-    _append_rows("Dead-End Note Samples", deadend_sample)
+        _append_rows("Priority Isolated Notes", isolated_sample)
+        _append_rows("Orphan Note Samples", orphan_sample)
+        _append_rows("Dead-End Note Samples", deadend_sample)
 
     lines.extend([
         "",
@@ -943,6 +958,9 @@ def _structure_report_markdown(data: dict) -> str:
         "",
         "## Related",
         f"- {_structure_note_link(STRUCTURE_ROOT_HUB, display='Vault Operations Index')}",
+        f"- {_structure_note_link(SNAPSHOT_REPORT_CONTRACT, display='Vault Snapshot Report Contract')}",
+        f"- {_structure_note_link(VAULT_EXCEPTION_DASHBOARD, display='Vault Exception Dashboard')}",
+        f"- {_structure_note_link(WEEKLY_REVIEW_RUNBOOK, display='Weekly Vault Review Runbook')}",
         "",
     ])
 
@@ -1581,7 +1599,6 @@ def _simplify_review_markdown(data: dict, *, dedupe_limit: int) -> str:
     audit = data["audit"]
     structure = data["structure"]
     dedupe = data["dedupe"]
-    workflow = data["workflow"]
     doctor = review["doctor"]
     dashboard = review["dashboard"]
 
@@ -1593,8 +1610,15 @@ def _simplify_review_markdown(data: dict, *, dedupe_limit: int) -> str:
         f"- Health snapshot: **{dashboard['unresolved_links']}** unresolved links, **{len(audit['issues']['missing_tldr'])}** notes missing `## TL;DR`, and **{structure['counts']['orphans']} / {structure['counts']['deadends']} / {structure['counts']['isolated']}** active-scope orphan/dead-end/isolated notes.",
         f"- Dedupe snapshot: **{dedupe['basename_groups']}** duplicate basename groups and **{dedupe['alias_groups']}** duplicate alias groups across **{dedupe['scope_notes']}** active notes.",
         f"- Readability snapshot: **{len(audit['issues']['oversized_overviews'])}** oversized overviews and **{len(audit['issues']['cleanup_inbox_backlog'])}** project MOCs with cleanup backlog.",
+        f"- Treat this as a snapshot report under {_structure_note_link(SNAPSHOT_REPORT_CONTRACT, display='Vault Snapshot Report Contract')}. Use {_structure_note_link(VAULT_EXCEPTION_DASHBOARD, display='Vault Exception Dashboard')} or {_structure_note_link(WEEKLY_REVIEW_RUNBOOK, display='Weekly Vault Review Runbook')} for the live review sequence.",
         "",
-        "## Health Snapshot",
+        "## Scope",
+        "",
+        f"- Generated on **{data['generated_at']}** for **{doctor['vault_name']}**.",
+        "- Snapshot of active-note health, duplicate-name hotspots, and readability risks.",
+        "- This note summarizes the current state and highest-value follow-up items. It does not replace the live review surfaces.",
+        "",
+        "## Snapshot Summary",
         "",
         f"- Files: **{dashboard['files']}**",
         f"- Folders: **{dashboard['folders']}**",
@@ -1603,30 +1627,8 @@ def _simplify_review_markdown(data: dict, *, dedupe_limit: int) -> str:
         f"- Open tasks: **{review['tasks']['todo']}**",
         f"- Done tasks: **{review['tasks']['done']}**",
         "",
-        "## Triage Queues",
-        "",
-        "### Inbox",
+        "## Hotspots",
     ]
-    if workflow["inbox_paths"]:
-        for path in workflow["inbox_paths"]:
-            lines.append(f"- {_structure_note_link(Path(path))}")
-    else:
-        lines.append("- none")
-
-    lines.extend([
-        "",
-        "### Drafts",
-    ])
-    if workflow["draft_paths"]:
-        for path in workflow["draft_paths"]:
-            lines.append(f"- {_structure_note_link(Path(path))}")
-    else:
-        lines.append("- none")
-
-    lines.extend([
-        "",
-        "## Active Flags",
-    ])
     if data["flags"]:
         lines.append("")
         for flag in data["flags"]:
@@ -1634,47 +1636,18 @@ def _simplify_review_markdown(data: dict, *, dedupe_limit: int) -> str:
     else:
         lines.extend(["", "- No simplify or dedupe flags detected."])
 
-    lines.extend([
-        "",
-        "## Structure Hotspots",
-        "",
-        "### Orphan Hotspots",
-        "| Folder | Count |",
-        "| --- | ---: |",
-    ])
-    orphan_hotspots = structure["orphans"]["hotspots"]
-    if orphan_hotspots:
-        for item in orphan_hotspots:
-            lines.append(f"| `{item['folder']}` | {item['count']} |")
-    else:
-        lines.append("| none | 0 |")
-
-    lines.extend([
-        "",
-        "### Dead-End Hotspots",
-        "| Folder | Count |",
-        "| --- | ---: |",
-    ])
-    deadend_hotspots = structure["deadends"]["hotspots"]
-    if deadend_hotspots:
-        for item in deadend_hotspots:
-            lines.append(f"| `{item['folder']}` | {item['count']} |")
-    else:
-        lines.append("| none | 0 |")
-
     def _append_duplicate_table(title: str, groups: list[dict[str, object]], *, label: str) -> None:
+        if not groups:
+            return
         lines.extend([
             "",
-            f"## {title}",
+            f"### {title}",
             f"| {label} | Count | Notes |",
             "| --- | ---: | --- |",
         ])
-        if groups:
-            for group in groups[:dedupe_limit]:
-                links = "<br/>".join(str(link) for link in group["links"])
-                lines.append(f"| `{group['value']}` | {group['count']} | {links} |")
-        else:
-            lines.append("| none | 0 | — |")
+        for group in groups[:dedupe_limit]:
+            links = "<br/>".join(str(link) for link in group["links"])
+            lines.append(f"| `{group['value']}` | {group['count']} | {links} |")
 
     _append_duplicate_table("Duplicate File Names", dedupe["basename_duplicates"], label="Basename")
     if dedupe["alias_scan_enabled"]:
@@ -1682,38 +1655,37 @@ def _simplify_review_markdown(data: dict, *, dedupe_limit: int) -> str:
     else:
         lines.extend([
             "",
-            "## Duplicate Aliases",
-            "",
-            "- Alias scan skipped because `PyYAML` is not available locally.",
+            "- Duplicate alias scan skipped because `PyYAML` is not available locally.",
         ])
 
-    lines.extend([
-        "",
-        "## Readability Hotspots",
-        "",
-        "### Oversized Overviews",
-        "| Overview | Lines |",
-        "| --- | ---: |",
-    ])
     oversized_overviews = audit["issues"]["oversized_overviews"]
     if oversized_overviews:
+        lines.extend([
+            "",
+            "### Readability Hotspots",
+            "",
+            "#### Oversized Overviews",
+            "| Overview | Lines |",
+            "| --- | ---: |",
+        ])
         for item in oversized_overviews:
             lines.append(f"| {_structure_note_link(Path(str(item['path'])))} | {item['lines']} |")
-    else:
-        lines.append("| none | 0 |")
 
-    lines.extend([
-        "",
-        "### Cleanup Inbox Backlog",
-        "| Overview | Pending Entries |",
-        "| --- | ---: |",
-    ])
     cleanup_backlog = audit["issues"]["cleanup_inbox_backlog"]
     if cleanup_backlog:
+        if not oversized_overviews:
+            lines.extend([
+                "",
+                "### Readability Hotspots",
+            ])
+        lines.extend([
+            "",
+            "#### Cleanup Inbox Backlog",
+            "| Overview | Pending Entries |",
+            "| --- | ---: |",
+        ])
         for item in cleanup_backlog:
             lines.append(f"| {_structure_note_link(Path(str(item['path'])))} | {item['count']} |")
-    else:
-        lines.append("| none | 0 |")
 
     lines.extend([
         "",
@@ -1726,6 +1698,9 @@ def _simplify_review_markdown(data: dict, *, dedupe_limit: int) -> str:
         "",
         "## Related",
         f"- {_structure_note_link(STRUCTURE_ROOT_HUB, display='Vault Operations Index')}",
+        f"- {_structure_note_link(SNAPSHOT_REPORT_CONTRACT, display='Vault Snapshot Report Contract')}",
+        f"- {_structure_note_link(VAULT_EXCEPTION_DASHBOARD, display='Vault Exception Dashboard')}",
+        f"- {_structure_note_link(WEEKLY_REVIEW_RUNBOOK, display='Weekly Vault Review Runbook')}",
         f"- {_structure_note_link(Path(STRUCTURE_REPORT_DEFAULT), display='Vault Structure Cleanup Report')}",
         "",
     ])
