@@ -23,6 +23,7 @@ DEFAULT_VAULT_DIR = Path("~/Documents/obsidian_vault").expanduser()
 INBOX_DIR = "0️⃣-Inbox"
 DRAFTS_DIR = "2️⃣-Drafts"
 PROJECTS_ROOT = "5️⃣-Projects"
+RAW_SUBMODULE_DIR = "raw"
 HELPER_WARNING = "Unable to find helper app"
 REQUIRED_FOLDERS = (
     INBOX_DIR,
@@ -41,6 +42,7 @@ AUDIT_SKIP_DIRS = {
     ".agent",
     ".venv",
     ".venv_xlsx",
+    RAW_SUBMODULE_DIR,
     "assets",
     "4️⃣-Attachments",
     "archive",
@@ -53,6 +55,7 @@ AUDIT_SKIP_FILE_NAMES = {
 TLDR_SKIP_TOP_LEVEL_DIRS = {
     "agent-skills",
     "help_obsidian_md",
+    RAW_SUBMODULE_DIR,
 }
 TLDR_SKIP_FILE_NAMES = {
     "README.md",
@@ -124,6 +127,13 @@ def _display_path(path: Path) -> str:
     if str(relative) == ".":
         return "~"
     return f"~/{relative}"
+
+
+def _raw_submodule_relative_path(config: dict) -> Path:
+    value = config.get("raw_submodule_path")
+    if isinstance(value, str) and value.strip():
+        return Path(_normalize_relative_path(value, label="Raw submodule path"))
+    return Path(RAW_SUBMODULE_DIR)
 
 
 def _slugify(text: str) -> str:
@@ -204,6 +214,65 @@ def _clean_cli_stream(text: str) -> tuple[str, bool]:
 
 def _run_process(cmd: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(cmd, cwd=cwd, text=True, capture_output=True, check=False)
+
+
+def _git_stdout(vault_dir: Path, *args: str, check: bool = True) -> str:
+    result = _run_process(["git", *args], cwd=vault_dir)
+    if check and result.returncode != 0:
+        details = "\n".join(part for part in [(result.stdout or "").strip(), (result.stderr or "").strip()] if part)
+        message = f"Git command failed ({result.returncode}): git {' '.join(args)}"
+        if details:
+            message = f"{message}\n{details}"
+        _die(message, exit_code=result.returncode)
+    return (result.stdout or "").strip()
+
+
+def _submodule_status(vault_dir: Path, relative_path: Path) -> dict:
+    info = {
+        "path": relative_path.as_posix(),
+        "configured": False,
+        "exists": False,
+        "initialized": False,
+        "url": None,
+        "head": None,
+        "dirty": False,
+    }
+    gitmodules = vault_dir / ".gitmodules"
+    if gitmodules.exists():
+        url = _git_stdout(
+            vault_dir,
+            "config",
+            "--file",
+            ".gitmodules",
+            "--get",
+            f"submodule.{relative_path.as_posix()}.url",
+            check=False,
+        )
+        if url:
+            info["configured"] = True
+            info["url"] = url
+
+    submodule_dir = vault_dir / relative_path
+    info["exists"] = submodule_dir.exists()
+    if not submodule_dir.exists():
+        return info
+
+    git_ref = submodule_dir / ".git"
+    info["initialized"] = git_ref.exists()
+    if not info["initialized"]:
+        return info
+
+    head = _git_stdout(vault_dir, "submodule", "status", "--", relative_path.as_posix(), check=False)
+    if head:
+        cleaned = head.strip()
+        if cleaned and cleaned[0] in {"-", "+", "U"}:
+            cleaned = cleaned[1:].strip()
+        if cleaned:
+            info["head"] = cleaned.split()[0]
+
+    sub_status = _run_process(["git", "status", "--porcelain=v1"], cwd=submodule_dir)
+    info["dirty"] = bool((sub_status.stdout or "").strip())
+    return info
 
 
 def _obsidian_binary() -> str:
@@ -1272,6 +1341,7 @@ def _doctor_data(vault_dir: Path) -> dict:
     vault_name, _, name_helper = _obsidian_command(vault_dir, "vault", "info=name")
     vault_path, _, path_helper = _obsidian_command(vault_dir, "vault", "info=path")
     helper_warning = helper_warning or version_helper or name_helper or path_helper
+    raw_submodule = _submodule_status(vault_dir, _raw_submodule_relative_path(config))
     return {
         "vault_dir": str(vault_dir),
         "vault_name": vault_name.strip() or config.get("vault_name") or vault_dir.name,
@@ -1279,6 +1349,7 @@ def _doctor_data(vault_dir: Path) -> dict:
         "config_path": str(CONFIG_PATH),
         "default_repo": config.get("default_repo"),
         "prefer_local": config.get("prefer_local"),
+        "raw_submodule": raw_submodule,
         "obsidian_binary": _obsidian_binary(),
         "cli_ready": bool(help_output),
         "version": version_output.strip(),
@@ -1302,6 +1373,21 @@ def _doctor(vault_dir: Path, *, json_output: bool) -> None:
     print(f"Config: {data['config_path']}")
     print(f"Default repo: {data['default_repo'] or '(unset)'}")
     print(f"Prefer local: {data['prefer_local']!r}")
+    raw = data["raw_submodule"]
+    raw_state = "missing"
+    if raw["configured"] and raw["initialized"]:
+        raw_state = "ready"
+    elif raw["configured"] and raw["exists"]:
+        raw_state = "present but not initialized"
+    elif raw["configured"]:
+        raw_state = "configured but absent"
+    print(f"Raw submodule: {raw['path']} ({raw_state})")
+    if raw["url"]:
+        print(f"Raw repo: {raw['url']}")
+    if raw["head"]:
+        print(f"Raw HEAD: {raw['head']}")
+    if raw["dirty"]:
+        print("Warning: raw submodule has uncommitted changes.")
     print("CLI ready: yes")
     if helper_warning:
         print("Warning: Obsidian printed macOS helper-app warnings, but CLI commands still completed successfully.")
@@ -2220,6 +2306,56 @@ def _capture_note(
         _run_sync(vault_dir, message=f"Add note: {file_name}", dry_run=False)
 
 
+def _capture_raw_note(
+    vault_dir: Path,
+    *,
+    title: str,
+    folder: str,
+    name: str | None,
+    body: str | None,
+    source: str | None,
+    extension: str,
+    overwrite: bool,
+    dry_run: bool,
+) -> None:
+    target_folder, relative_folder = _resolve_vault_path(
+        vault_dir,
+        folder,
+        label="Raw target folder",
+        must_exist=True,
+        expect_directory=True,
+    )
+    if not relative_folder.startswith(f"{RAW_SUBMODULE_DIR}/") and relative_folder != RAW_SUBMODULE_DIR:
+        _die(f'Raw capture must stay inside "{RAW_SUBMODULE_DIR}/": {relative_folder}')
+    normalized_extension = extension.strip().lstrip(".").lower() or "md"
+    file_name = _normalize_note_name(name) if name else _slugify(title)
+    relative_path = f"{relative_folder}/{file_name}.{normalized_extension}"
+    lines: list[str]
+    if normalized_extension == "md":
+        lines = [f"# {title}", ""]
+        if source:
+            lines.extend(["Source: " + source.strip(), ""])
+        if body:
+            lines.extend([body.strip(), ""])
+    else:
+        lines = []
+        if source:
+            lines.append("Source: " + source.strip())
+        if body:
+            if lines:
+                lines.append("")
+            lines.append(body.strip())
+    content = "\n".join(lines).rstrip() + "\n"
+    destination = target_folder / f"{file_name}.{normalized_extension}"
+    if destination.exists() and not overwrite:
+        _die(f"Raw note already exists: {destination}")
+    if dry_run:
+        print(f"Would create raw file: {relative_path}")
+        return
+    destination.write_text(content, encoding="utf-8")
+    print(f"Created raw file: {relative_path}")
+
+
 def _project_note(
     vault_dir: Path,
     *,
@@ -2465,6 +2601,16 @@ def _parse_args() -> argparse.Namespace:
     capture_parser.add_argument("--sync", action="store_true", help="Run git sync after creation")
     capture_parser.add_argument("--dry-run", action="store_true", help="Print the planned path only")
 
+    capture_raw_parser = subparsers.add_parser("capture-raw", help='Create a raw source file inside the raw submodule')
+    capture_raw_parser.add_argument("title", help="Human title for the raw item")
+    capture_raw_parser.add_argument("--folder", default=f"{RAW_SUBMODULE_DIR}/inbox", help=f'Target folder. Default: "{RAW_SUBMODULE_DIR}/inbox"')
+    capture_raw_parser.add_argument("--name", default=None, help="Optional file name override")
+    capture_raw_parser.add_argument("--body", default=None, help="Optional body text")
+    capture_raw_parser.add_argument("--source", default=None, help="Optional source URL or citation line")
+    capture_raw_parser.add_argument("--extension", default="md", help='File extension for the raw item. Default: "md"')
+    capture_raw_parser.add_argument("--overwrite", action="store_true", help="Overwrite an existing raw file")
+    capture_raw_parser.add_argument("--dry-run", action="store_true", help="Print the planned path only")
+
     project_note_parser = subparsers.add_parser("project-note", help="Create a note inside a project folder")
     project_note_parser.add_argument("project", help="Project folder name under 5️⃣-Projects/<category>/")
     project_note_parser.add_argument("title", help="Human title for the note")
@@ -2594,6 +2740,20 @@ def main() -> None:
             body=args.body,
             overwrite=args.overwrite,
             sync=args.sync,
+            dry_run=args.dry_run,
+        )
+        return
+
+    if args.command == "capture-raw":
+        _capture_raw_note(
+            vault_dir,
+            title=args.title,
+            folder=args.folder,
+            name=args.name,
+            body=args.body,
+            source=args.source,
+            extension=args.extension,
+            overwrite=args.overwrite,
             dry_run=args.dry_run,
         )
         return

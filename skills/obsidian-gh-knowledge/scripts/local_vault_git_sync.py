@@ -60,6 +60,46 @@ def _now_message() -> str:
     return "Vault sync (agent): " + datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
 
 
+def _submodule_entries(cwd: str) -> list[dict]:
+    raw = _git_stdout(["submodule", "status", "--recursive"], cwd=cwd).splitlines()
+    entries: list[dict] = []
+    for line in raw:
+        text = line.rstrip()
+        if not text:
+            continue
+        prefix = text[0]
+        rest = text[1:].strip()
+        parts = rest.split()
+        if len(parts) < 2:
+            continue
+        commit = parts[0]
+        path = parts[1]
+        entries.append(
+            {
+                "prefix": prefix,
+                "commit": commit,
+                "path": path,
+            }
+        )
+    return entries
+
+
+def _dirty_submodules(cwd: str) -> list[dict]:
+    dirty: list[dict] = []
+    for entry in _submodule_entries(cwd):
+        sub_path = os.path.join(cwd, entry["path"])
+        if entry["prefix"] in {"-", "U"}:
+            dirty.append({**entry, "reason": "not initialized" if entry["prefix"] == "-" else "conflicted"})
+            continue
+        result = _run(["git", "status", "--porcelain=v1"], cwd=sub_path, check=False)
+        if result.returncode != 0:
+            dirty.append({**entry, "reason": "status check failed"})
+            continue
+        if (result.stdout or "").strip():
+            dirty.append({**entry, "reason": "has uncommitted changes"})
+    return dirty
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Sync a local Obsidian vault git repo: pull (rebase), commit, and push."
@@ -78,6 +118,11 @@ def main() -> None:
     )
     parser.add_argument("--no-pull", action="store_true", help="Skip git pull --rebase --autostash")
     parser.add_argument("--no-push", action="store_true", help="Skip git push")
+    parser.add_argument(
+        "--allow-dirty-submodules",
+        action="store_true",
+        help="Allow sync to continue even when submodules have uncommitted or uninitialized state",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Print planned commands without changing anything")
 
     args = parser.parse_args()
@@ -95,6 +140,18 @@ def main() -> None:
 
     if not args.no_push and not _git_ok(["remote", "get-url", "origin"], cwd=vault_dir):
         _die('Missing git remote "origin": set a remote or run with --no-push.')
+
+    dirty_submodules = _dirty_submodules(vault_dir)
+    if dirty_submodules and not args.allow_dirty_submodules:
+        lines = [
+            "Refusing to sync because one or more submodules are not clean.",
+            "Resolve the submodule state first, or rerun with --allow-dirty-submodules if you really mean it.",
+            "",
+            "Problematic submodules:",
+        ]
+        for entry in dirty_submodules:
+            lines.append(f"  - {entry['path']}: {entry['reason']}")
+        _die("\n".join(lines))
 
     planned: list[list[str]] = []
 
@@ -121,6 +178,10 @@ def main() -> None:
     if args.dry_run:
         print(f"Vault: {vault_dir}")
         print(f"Branch: {branch}")
+        if dirty_submodules:
+            print("Submodule warnings:")
+            for entry in dirty_submodules:
+                print(f"  - {entry['path']}: {entry['reason']}")
         print("Planned:")
         for cmd in planned:
             print(f"  - {_format_cmd(cmd)}")

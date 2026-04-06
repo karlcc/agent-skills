@@ -11,6 +11,7 @@ description: Bootstrap and operate an Obsidian vault with official Obsidian CLI 
 - **Agent Rules:** Agents **must** read before write, include a `## TL;DR`, and **must** use Mermaid diagrams for visual explanations.
 - **Project Scoping:** When working on a specific project (cmux, trends, etc.), **stay within that project's folder** under `5️⃣-Projects/GitHub/<project>/`. See "Project Scoping (CRITICAL)" section below.
 - **Local Wrapper:** Use `scripts/local_obsidian_knowledge.py` for repeatable local macOS workflows that combine Obsidian CLI operations with this vault's project rules and git sync.
+- **Raw Materials:** If the vault mounts `raw/` as a Git submodule, treat it as source-input storage rather than curated note space.
 - **Health Default:** Use `simplify-review` first when the vault feels hard to read or hard to trust; it reconciles full-vault Obsidian counts with active-scope graph checks and overview readability audits.
 
 ## Execution Mode Flowchart
@@ -129,12 +130,24 @@ What the bootstrap script does:
 
 - Clones the confirmed vault repo into `~/Documents/<repo-name>` unless the user provided `--vault-dir`.
 - Reuses the directory if it is already a clone of the same repo.
+- Can optionally initialize a raw-materials submodule such as `raw/` when `--raw-submodule-url` and `--init-raw-submodule` are provided.
 - Updates `~/.config/obsidian-gh-knowledge/config.json`:
   - Sets `local_vault_path`
   - Sets `prefer_local` to `true`
   - Sets `default_repo` if it is currently missing
   - Adds `repos.<key>` if `--repo-key` is provided
   - Sets `vault_name` if it is currently missing
+  - Sets `raw_submodule_path` and `raw_submodule_url` when raw-submodule bootstrap is used
+
+Optional raw-submodule bootstrap:
+
+```bash
+python3 "$INIT_SCRIPT_PATH" \
+  --repo-url "https://github.com/karlorz/obsidian_vault" \
+  --repo-key personal \
+  --raw-submodule-url "https://github.com/karlorz/obsidian_vault_raw.git" \
+  --init-raw-submodule
+```
 
 After bootstrap, re-run mode selection and prefer local CLI or local git fallback from the new `local_vault_path`.
 
@@ -297,6 +310,7 @@ python3 "$LOCAL_WRAPPER" structure-report --dry-run
 python3 "$LOCAL_WRAPPER" structure-fix --dry-run
 python3 "$LOCAL_WRAPPER" archive-fix --dry-run
 python3 "$LOCAL_WRAPPER" capture "Quick note"
+python3 "$LOCAL_WRAPPER" capture-raw "Clipped article" --source "https://example.com/post"
 python3 "$LOCAL_WRAPPER" project-note cmux "Feature review"
 python3 "$LOCAL_WRAPPER" organize "0️⃣-Inbox/feature-review.md" cmux
 python3 "$LOCAL_WRAPPER" sync --message "Update vault notes"
@@ -307,6 +321,7 @@ python3 "$LOCAL_WRAPPER" sync --message "Update vault notes"
 Wrapper responsibilities:
 
 - Resolves the local vault path from config.
+- Reports `raw/` submodule health in `doctor` when configured.
 - Verifies the official `obsidian` CLI is available.
 - Runs a one-click `review` summary with vault health metrics, task counts, recent files, and unresolved-link samples.
 - Treats `dashboard` and `review` orphan/dead-end numbers as Obsidian full-vault signals, not the precise cleanup scope for active notes.
@@ -316,9 +331,11 @@ Wrapper responsibilities:
 - Can generate a local graph-based structure cleanup report for active-scope orphan and dead-end notes without depending on flaky live CLI list output.
 - Can apply high-confidence structure fixes by linking dead-end notes to their nearest `_Overview.md` and adding orphan notes to auto-generated cleanup sections inside project MOCs.
 - Can create missing `_Archive-Index.md` notes and backlink archived notes so archive folders stay navigable without polluting active MOCs.
+- Skips the `raw/` subtree in readability and TL;DR audits because raw materials are source input, not curated notes.
 - Reads `_Overview.md` before project-scoped note creation or organization.
 - Uses `obsidian move` so note moves happen inside Obsidian instead of raw shell renames.
 - Optionally finishes with `local_vault_git_sync.py`.
+- Blocks sync by default when submodules are dirty or uninitialized; use `--allow-dirty-submodules` only when you mean it.
 
 ### Local write workflow
 
